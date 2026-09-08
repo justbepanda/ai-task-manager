@@ -156,6 +156,45 @@ Redmine уведомления с определённого проекта та
 
 ------
 
+## ClientCompany (Клиенты)
+
+Компания-клиент (не путать с classification=`client`).
+
+- id, name, description, notes, timestamps
+- M2M с `projects` через `client_company_project`
+- hasMany `ClientContact` (каскадное удаление контактов)
+
+Сервис: `App\Domain\Clients\ClientCompanyService`.
+
+------
+
+## ClientContact (Контакты)
+
+Человек в компании-клиенте.
+
+- принадлежит ровно одной `ClientCompany`
+- ФИО: last_name, first_name, middle_name; position; emails (JSON); telegram; phone; notes
+- M2M с `projects` через `client_contact_project`
+- `fullName(): string` → «Фамилия Имя Отчество»
+
+Правило: при привязке контакта к проектам **также** привязывается его компания (`syncWithoutDetaching`). Отвязка контакта **не** отвязывает компанию.
+
+Сервис: `App\Domain\Clients\ClientContactService`.
+
+------
+
+## Executor (Исполнители)
+
+Сотрудник нашей компании.
+
+- ФИО, position, emails (JSON), telegram, phone, notes, is_active
+- M2M с `projects` через `executor_project` (независимо от клиентов)
+- `fullName(): string`
+
+Сервис: `App\Domain\Executors\ExecutorService`.
+
+------
+
 ## Conversation
 
 Логическая переписка.
@@ -274,8 +313,11 @@ client
 technical
 newsletter
 personal
+ignored
 unknown
 ```
+
+`ignored` («Игнорируемое») — глобальный чёрный список (Яндекс ID, пароли приложений, системный шум). Отдельно от `technical` (Redmine/Jira и другие проектные технические источники).
 
 При необходимости классификация может быть расширена.
 
@@ -431,25 +473,28 @@ AI не должен самостоятельно отправлять пись�
 
 # 12. Интерфейс MVP
 
-Не создавать сложный frontend.
+Админка MVP — **Orchid Platform** (`orchid/platform` ^14.53), префикс `DASHBOARD_PREFIX=/admin`.
 
-Нужны следующие разделы.
+Интерфейс админки на **русском** (`APP_LOCALE=ru`, `APP_FALLBACK_LOCALE=ru`).
 
-## Dashboard
+Публичный сайт (`/`) — пустая страница (как rbi2025 public), без редиректа в админку.
+
+Не создавать отдельный сложный frontend и не возвращать Blade-админку.
+
+Нужны Orchid-экраны:
+
+## Dashboard (`/admin`)
 
 Показывать:
 
-- новые события;
-- события, требующие внимания;
-- предложения AI;
-- количество необработанных сообщений;
-- сообщения без определённого проекта.
+- счётчики: всего писем, pending, needs_manual, unknown, ignored, события/письма требующие внимания, pending ManagerAction, число проектов;
+- быстрые ссылки на pending actions, needs_manual сообщения и игнорируемые.
 
 ------
 
 ## Projects
 
-CRUD проектов.
+CRUD проектов в Orchid.
 
 Для проекта:
 
@@ -457,15 +502,26 @@ CRUD проектов.
 - описание;
 - статус;
 - инструкции;
-- правила сопоставления писем;
+- правила сопоставления писем (textarea, один пункт на строку → массивы через `ProjectService`);
 - список связанных сообщений;
-- список событий.
+- список событий;
+- связанные клиенты / контакты / исполнители (read-only на карточке проекта).
+
+------
+
+## Клиенты / Контакты / Исполнители
+
+Справочники Orchid (меню «Справочники»):
+
+- Клиенты (`platform.client-companies`) — CRUD компаний, контакты на карточке, multi-select проектов;
+- Контакты (`platform.client-contacts.*`) — CRUD под компанией;
+- Исполнители (`platform.executors`) — CRUD + is_active + проекты.
 
 ------
 
 ## Inbox / Events
 
-Список обработанных сообщений.
+Список нормализованных сообщений.
 
 Для каждого:
 
@@ -484,13 +540,31 @@ CRUD проектов.
 
 - классификацию;
 - проект;
-- результат анализа.
+- результат анализа (с записью в `analysis_corrections`).
+
+Экран **«Распределение по проектам»** (`platform.messages.assign`, `/admin/messages/assign`):
+группирует нераспределённые письма по кандидатам `ProjectMatcher` (порог `project_match_suggest_threshold`, без LLM),
+массовая привязка и создание проекта + привязка (`SuggestUnassignedMessageAssignments`, `BulkAttachMessagesToProject`).
+Ссылка в commandBar входящих и пункт меню «Распределение» под «Почта».
+
+------
+
+## Mail filters / Чёрный список
+
+Глобальные фильтры игнора (`mail_filter_settings`, singleton):
+
+- blocked emails / domains;
+- subject / body stop words.
+
+Orchid: «Фильтры почты» (`platform.mail-filters`), список «Игнорируемые» (`platform.messages.ignored`).
+Детерминированный `MailFilterMatcher` применяется **до** technical/newsletter/client.
+Из карточки письма: кнопка «В чёрный список».
 
 ------
 
 ## Manager Actions
 
-Очередь предложений AI.
+Очередь предложений AI («Действия менеджера»).
 
 Для каждого предложения:
 
@@ -509,6 +583,8 @@ Draft ответа
 Редактировать
 Отклонить
 ```
+
+Доменная логика — в сервисах (`ProjectService`, `ClientCompanyService`, `ClientContactService`, `ExecutorService`, `MessageManualOverrideService`, `ManagerActionService`, `MailFilterSettingService`, `SuggestUnassignedMessageAssignments`, `BulkAttachMessagesToProject`), не в Orchid screens.
 
 ------
 
@@ -794,6 +870,16 @@ AI использовать там, где требуется понимание
 
 Система должна сохранять данные, позволяющие оценить гипотезу.
 
+События пишутся в таблицу `hypothesis_metric_events` через `App\Domain\Metrics\HypothesisMetricsRecorder`
+(например: `mail_received`, `mail_classified_client`, `project_auto_matched`, `project_unmatched`,
+`project_ambiguous`, `event_requires_manager`, `draft_created`, `draft_approved_unchanged`,
+`draft_edited`, `action_rejected`, `analysis_corrected`).
+
+Агрегаты:
+
+- Orchid: Dashboard (блок гипотезы) + экран «Метрики гипотезы» (`/admin/metrics/hypothesis`);
+- CLI: `php artisan metrics:hypothesis-report` (`--json`, `--evaluate`) и `php artisan mailbox:evaluate`.
+
 Минимально измерять:
 
 - количество полученных писем;
@@ -994,12 +1080,11 @@ project_id = null
 - редактирование;
 - отклонение.
 
-### Phase 7 — UI
+### Phase 7 — UI (Orchid)
 
-- Dashboard;
-- Inbox;
-- Projects;
-- Manager Actions.
+- Orchid admin `/admin`: Dashboard, Inbox, Projects, Manager Actions;
+- публичный `/` пустой;
+- Blade admin UI удалён (no backward compatibility в разработке).
 
 ### Phase 8 — Real mailbox test
 
@@ -1058,6 +1143,11 @@ MVP считается готовым, когда:
 8. после этого реализовывать проект по Phase 1 → Phase 8.
 
 Если обнаруживается архитектурное решение, которое противоречит этому документу, остановиться и явно описать проблему в плане вместо молчаливого изменения требований.
+
+При изменении архитектуры coding agent обязан синхронно обновить AGENTS.md, docs/IMPLEMENTATION_PLAN.md и README.md.
+В разработке нет backward compatibility: устаревший код/Blade/роуты удалять.
+После существенных изменений функциональности — обновлять seeders и при необходимости `make fresh-seed`.
+Качество: typed properties/enums, thin screens / fat services, обязательные tests, без секретов в логах.
 
 Главный приоритет:
 
