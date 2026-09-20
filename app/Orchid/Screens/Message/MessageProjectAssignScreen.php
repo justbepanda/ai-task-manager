@@ -23,6 +23,8 @@ class MessageProjectAssignScreen extends Screen
 
         return [
             'board' => $this->board,
+            'assignMode' => 'rules',
+            'hasSuggestion' => true,
         ];
     }
 
@@ -33,12 +35,15 @@ class MessageProjectAssignScreen extends Screen
 
     public function description(): ?string
     {
-        return 'Предложения по правилам и теме Redmine. Новые проекты (например Tekta) — отдельно, не в «Redmine / техподдержка».';
+        return 'Предложения по правилам и теме Redmine.';
     }
 
     public function commandBar(): iterable
     {
         return [
+            Link::make('Через LLM')
+                ->icon('bs.stars')
+                ->route('platform.messages.assign-llm'),
             Link::make('К входящим')
                 ->icon('bs.arrow-left')
                 ->route('platform.messages'),
@@ -48,7 +53,10 @@ class MessageProjectAssignScreen extends Screen
     public function layout(): iterable
     {
         return [
-            Layout::view('orchid.messages.assign-board'),
+            Layout::view('orchid.messages.assign-board', [
+                'assignMode' => 'rules',
+                'hasSuggestion' => true,
+            ]),
         ];
     }
 

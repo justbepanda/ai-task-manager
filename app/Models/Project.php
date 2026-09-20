@@ -7,6 +7,7 @@ use Database\Factories\ProjectFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
@@ -16,6 +17,7 @@ use Orchid\Screen\AsSource;
     'name',
     'description',
     'status',
+    'manager_executor_id',
     'last_event_type',
     'last_event_at',
     'last_summary',
@@ -31,6 +33,11 @@ class Project extends Model
             'status' => ProjectStatus::class,
             'last_event_at' => 'datetime',
         ];
+    }
+
+    public function managerExecutor(): BelongsTo
+    {
+        return $this->belongsTo(Executor::class, 'manager_executor_id');
     }
 
     public function instruction(): HasOne

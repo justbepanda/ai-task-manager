@@ -13,6 +13,7 @@ class ProjectService
      *     name: string,
      *     description?: ?string,
      *     status: ProjectStatus|string,
+     *     manager_executor_id?: int|string|null,
      *     instruction_body?: ?string,
      *     client_emails?: list<string>|string|null,
      *     staff_emails?: list<string>|string|null,
@@ -30,12 +31,13 @@ class ProjectService
                 'name' => $data['name'],
                 'description' => $data['description'] ?? null,
                 'status' => $data['status'],
+                'manager_executor_id' => $this->nullableId($data['manager_executor_id'] ?? null),
             ]);
 
             $this->syncInstruction($project, $data['instruction_body'] ?? null);
             $this->syncMatchingRules($project, $data);
 
-            return $project->load(['instruction', 'matchingRule']);
+            return $project->load(['instruction', 'matchingRule', 'managerExecutor']);
         });
     }
 
@@ -44,6 +46,7 @@ class ProjectService
      *     name?: string,
      *     description?: ?string,
      *     status?: ProjectStatus|string,
+     *     manager_executor_id?: int|string|null,
      *     instruction_body?: ?string,
      *     client_emails?: list<string>|string|null,
      *     staff_emails?: list<string>|string|null,
@@ -66,6 +69,9 @@ class ProjectService
             if (array_key_exists('status', $data)) {
                 $project->status = $data['status'];
             }
+            if (array_key_exists('manager_executor_id', $data)) {
+                $project->manager_executor_id = $this->nullableId($data['manager_executor_id']);
+            }
             $project->save();
 
             if (array_key_exists('instruction_body', $data)) {
@@ -86,13 +92,24 @@ class ProjectService
                 $this->syncMatchingRules($project, $data);
             }
 
-            return $project->load(['instruction', 'matchingRule']);
+            return $project->load(['instruction', 'matchingRule', 'managerExecutor']);
         });
     }
 
     public function delete(Project $project): void
     {
         $project->delete();
+    }
+
+    private function nullableId(mixed $value): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        $id = (int) $value;
+
+        return $id > 0 ? $id : null;
     }
 
     /**

@@ -23,6 +23,16 @@ class ProjectListLayout extends Table
                     ->route('platform.projects.edit', $project)),
             TD::make('status', 'Статус')
                 ->render(fn (Project $project) => e($project->status->label())),
+            TD::make('manager', 'Менеджер')
+                ->render(fn (Project $project) => e($project->managerExecutor?->fullName() ?? '—')),
+            TD::make('messages_count', 'Входящие')
+                ->align(TD::ALIGN_CENTER)
+                ->width('120')
+                ->render(fn (Project $project) => Link::make((string) $project->messages_count)
+                    ->route('platform.messages', [
+                        'filter' => ['project_id' => $project->id],
+                    ])
+                    ->icon('bs.inbox')),
             TD::make('updated_at', 'Обновлён')
                 ->render(fn (Project $project) => $project->updated_at?->format('d.m.Y H:i')),
         ];

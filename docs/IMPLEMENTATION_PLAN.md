@@ -39,7 +39,7 @@
 - MySQL **8.4**
 - Redis **7**
 - nginx **1.27-alpine**
-- LLM: **Google Gemini** (через интерфейс `AiAnalyzer`, смена провайдера без смены домена)
+- LLM: **Hermes** → `LlmProvider` → **Google Gemini Flash** (смена модели без смены домена)
 
 **Phase 0 — DONE:** Docker/Make подняты, `http://localhost` → 200, миграции и example-тесты ок.
 
@@ -114,39 +114,74 @@ Make-команды (как rbi + полезные для MVP):
 App\Mail\Contracts\MailProvider
   └─ YandexMailProvider          # IMAP
 
-App\AI\Contracts\AiAnalyzer
-  └─ GeminiAiAnalyzer            # Gemini Flash (returns raw JSON array)
-  └─ FakeAiAnalyzer              # tests
+App\Hermes\ProcessIncomingMessage               # full pipeline: tools → optional LLM → apply
+App\Hermes\Contracts\HermesAgent
+  └─ DefaultHermesAgent                          # context → LlmProvider → HermesProposal
+App\Hermes\Contracts\LlmProvider
+  └─ GeminiAiAnalyzer                            # Gemini Flash (AiAnalyzer extends LlmProvider)
+  └─ FakeAiAnalyzer                              # tests
+App\AI\Contracts\AiAnalyzer                      # deprecated alias of LlmProvider
 
 App\AI\Services\BuildMessageContext
-App\AI\Services\AnalysisResultValidator          # array → AnalysisResult
-App\AI\Services\AnalyzeMessage                   # orchestrator (Job)
+App\AI\Services\AnalysisResultValidator
+App\AI\Services\AnalyzeMessage                   # Hermes propose → validate → Event
 
 App\Domain\Classification\MessageClassifier      # rules-first (ignored → technical → …)
 App\Domain\Classification\MailFilterMatcher      # global blacklist → classification=ignored
 App\Domain\Mail\MailFilterSettingService         # Orchid save lines→arrays + addBlockedEmail
-App\Domain\Projects\ProjectMatcher               # deterministic candidates
-App\Domain\Events\ApplyProjectEventService       # AI не пишет в Project напрямую (Phase 5)
-App\Domain\ManagerActions\ManagerActionService   # approve/edit/reject/complete (Phase 6)
+App\Domain\Projects\ProjectMatcher               # deterministic candidates (+ Redmine subject)
+App\Domain\Events\ApplyProjectEventService       # Hermes не пишет в Project напрямую
+App\Domain\ManagerActions\ManagerActionService   # approve/edit/reject/complete
 App\Domain\Metrics\HypothesisMetricsRecorder
 App\Domain\Clients\ClientCompanyService
-App\Domain\Clients\ClientContactService      # sync projects + syncWithoutDetaching company
+App\Domain\Clients\ClientContactService
 App\Domain\Executors\ExecutorService
 ```
 
 DTO:
 
 - `NormalizedIncomingMessage`
-- `MessageContext` (письмо + диалог + project + instructions + recent events + candidate_project_ids)
-- `AnalysisResult` (structured JSON fields from AGENTS §8)
+- `MessageContext` (письмо + диалог + project + instructions + recent events + candidate_projects)
+- `HermesProposal` (context + raw payload)
+- `StructuredAgentResult` / `AnalysisResult` (validated Hermes JSON fields)
 
 Config:
 
 - `config/mail_providers.php` — Yandex IMAP
 - `config/ai.php` — provider, model, confidence thresholds
-- `config/classification.php` — technical patterns
+- `config/classification.php` — technical patterns, Redmine subject senders
 
-Table `mail_filter_settings` (singleton id=1): `blocked_emails`, `blocked_domains`, `subject_stop_words`, `body_stop_words`.
+---
+
+## 3b. Архитектура Hermes (целевая)
+
+```text
+Message
+ ↓
+Hermes Agent
+ ├── classification
+ ├── project identification
+ ├── context retrieval
+ ├── event detection
+ ├── manager participation decision
+ └── draft generation
+ ↓
+Structured Agent Result
+ ↓
+Laravel validation
+ ↓
+Project State / Manager Action
+```
+
+```text
+Hermes → LlmProvider → Gemini Flash
+```
+
+Hermes **может**: читать письмо, контекст, искать проекты, анализировать, предлагать state/draft/ManagerAction.  
+Hermes **не может**: отправлять/удалять почту, писать критичные данные без валидации, выполнять произвольные команды.
+
+На MVP: `ProcessIncomingMessage` — единая точка входа Hermes (classify/match tools → optional LLM → Laravel apply). Детерминированные правила экономят LLM (§17).
+
 ---
 
 ## 4. Jobs / pipeline
@@ -154,14 +189,18 @@ Table `mail_filter_settings` (singleton id=1): `blocked_emails`, `blocked_domain
 ```text
 SyncYandexMailJob
   → PersistMessage (idempotent by source+external_id)
-  → ClassifyMessageJob
-  → IdentifyProjectJob
-  → AnalyzeMessageJob          # AI only when needed
+  → ClassifyMessageJob  (= Hermes ProcessIncomingMessage)
+        ├── tools: classification + project identification
+        ├── context retrieval
+        ├── [if needs LLM] HermesAgent::propose → validate → Event
+        └── [else] hermes_llm_skipped
   → ApplyEventJob
-  → CreateManagerActionJob     # if requires_manager
+  → ManagerAction (if requires_manager)
 ```
 
-Scheduler: `SyncYandexMailJob` каждые N минут (config).
+`AnalyzeMessageJob` остаётся для ручного повторного AI (карточка письма / bulk attach).
+
+Scheduler: `SyncYandexMailJob` каждые N минут. Orchid: «Синхронизировать почту».
 
 ---
 
@@ -173,7 +212,7 @@ Scheduler: `SyncYandexMailJob` каждые N минут (config).
 | 1 | Models, migrations, Project CRUD, instructions, matching rules | **DONE** |
 | 2 | Yandex IMAP + Message sync + scheduler/queue | **DONE** |
 | 3 | Classification + project candidates | **DONE** |
-| 4 | AiAnalyzer + Gemini + validation | **DONE** |
+| 4 | Hermes + LlmProvider (Gemini) + validation | **DONE** (Hermes layer introduced) |
 | 5 | Event + apply project state | **DONE** |
 | 6 | ManagerAction + draft approve/edit/reject | **DONE** |
 | 7 | Orchid admin: Dashboard, Inbox, Projects, Actions | **DONE** |
@@ -186,7 +225,7 @@ Enums, migrations/models (projects, instructions, matching rules, conversations,
 
 ### Phase 2 — DONE (кратко)
 
-Native PHP IMAP (`YandexMailProvider` + `ImapMailbox` / `ImapMessageMapper`), idempotent `PersistIncomingMessage` (`source`+`external_id`), `mail_sync_states` cursor (first run: newest 100 only), `SyncMailService` → `SyncYandexMailJob` / `mail:sync`, schedule via `config('mail_providers.sync_interval_minutes')`, stub `ClassifyMessageJob`, `FakeMailProvider` + feature/unit tests. No webklex.
+Native PHP IMAP (`YandexMailProvider` + `ImapMailbox` / `ImapMessageMapper`), idempotent `PersistIncomingMessage` (`source`+`external_id`), `mail_sync_states` cursor **per folder** (`provider`+`folder`; first run: newest 100 per folder), `listSyncFolders()` syncs all IMAP folders by default (user labels + Trash/Корзина; exclude spam/drafts/sent via `YANDEX_IMAP_FOLDER_EXCLUDE`), `SyncMailService` → `SyncYandexMailJob` / `mail:sync`, schedule via `config('mail_providers.sync_interval_minutes')`, stub `ClassifyMessageJob`, `FakeMailProvider` + feature/unit tests. No webklex.
 
 ### Phase 3 — DONE (кратко)
 
@@ -206,7 +245,7 @@ Rules-first `MessageClassifier` + `ProjectMatcher` + orchestrator `ClassifyAndMa
 
 ### Phase 7 — DONE (кратко)
 
-**Orchid Platform ^14.53** admin at `/admin` (`DASHBOARD_PREFIX`). UI language: **Russian** (`APP_LOCALE=ru`). Blade Project/ManagerAction UI **удалён** (no BC). Screens: `DashboardScreen`, `MessageList/View`, `MessageProjectAssignScreen` (`platform.messages.assign` — bulk attach via `SuggestUnassignedMessageAssignments` / `BulkAttachMessagesToProject`), `ProjectList/Edit`, `ManagerActionList/View`, `MailFilterSettingEditScreen`, ignored inbox (`platform.messages.ignored`) — thin UI, fat services (`ProjectService`, `MessageManualOverrideService`, `ManagerActionService`, `MailFilterSettingService`). Public `/` — empty welcome. Seeds: `AdminUserSeeder` (`developer@kelnik.ru` / `developer`), `ProjectSeeder`, `MailFilterSettingSeeder` (Yandex ID / system defaults), `DemoMailboxSeeder` (`MailSource::Seed`, `external_id` `seed:*`). Makefile: `.PHONY` includes `artisan` (fixes clash with root `artisan` file), `make seed`, `make fresh-seed`. `APP_URL=http://localhost`, `HTTP_PORT=80`.
+**Orchid Platform ^14.53** admin at `/admin` (`DASHBOARD_PREFIX`). UI language: **Russian** (`APP_LOCALE=ru`). Blade Project/ManagerAction UI **удалён** (no BC). Screens: `DashboardScreen`, `MessageList/View`, `MessageProjectAssignScreen` (`platform.messages.assign` — rules/`ProjectMatcher`), `MessageProjectAssignLlmScreen` (`platform.messages.assign-llm` — `SuggestUnassignedMessageAssignmentsWithLlm` + session `AssignmentBoardPlan`, attach via `BulkAttachMessagesToProject`), `ProjectList/Edit`, `ManagerActionList/View`, `MailFilterSettingEditScreen`, `AppSettingEditScreen` (`platform.settings` — Redmine auto-create + LLM auto-assign + confidence thresholds), ignored inbox (`platform.messages.ignored`) — thin UI, fat services (`ProjectService`, `MessageManualOverrideService`, `ManagerActionService`, `MailFilterSettingService`, `AppSettingService`, `AutoCreateProjectFromIncomingMail`, `AutoAssignProjectViaLlm`). Public `/` — empty welcome. Seeds: `AdminUserSeeder` (`developer@kelnik.ru` / `developer`), `MailFilterSettingSeeder`, `AppSettingSeeder` (auto-create/auto-assign **on** by default), optional `ProjectSeeder` / `DemoMailboxSeeder`. Makefile: `.PHONY` includes `artisan` (fixes clash with root `artisan` file), `make seed`, `make fresh-seed`. `APP_URL=http://localhost`, `HTTP_PORT=80`.
 
 ### Phase 8 — DONE (кратко)
 

@@ -2,9 +2,9 @@
 
 namespace Tests\Feature;
 
-use App\Domain\Classification\ClassifyAndMatchMessage;
 use App\Enums\MessageClassification;
 use App\Enums\MessageProcessingStatus;
+use App\Hermes\ProcessIncomingMessage;
 use App\Jobs\AnalyzeMessageJob;
 use App\Jobs\ClassifyMessageJob;
 use App\Models\Conversation;
@@ -12,7 +12,6 @@ use App\Models\MailFilterSetting;
 use App\Models\Message;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
-use Illuminate\Support\Facades\Queue;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
@@ -21,10 +20,8 @@ class MailFilterIgnoredPipelineTest extends TestCase
     use RefreshDatabase;
 
     #[Test]
-    public function ignored_message_is_classified_without_analyze_job(): void
+    public function ignored_message_is_classified_without_llm(): void
     {
-        Queue::fake([AnalyzeMessageJob::class]);
-
         MailFilterSetting::query()->create([
             'id' => 1,
             'blocked_emails' => [],
@@ -49,14 +46,14 @@ class MailFilterIgnoredPipelineTest extends TestCase
             'classification' => null,
         ]);
 
-        (new ClassifyMessageJob($message->id))->handle(app(ClassifyAndMatchMessage::class));
+        (new ClassifyMessageJob($message->id))->handle(app(ProcessIncomingMessage::class));
 
         $message->refresh();
 
         $this->assertSame(MessageClassification::Ignored, $message->classification);
         $this->assertNull($message->project_id);
         $this->assertSame(MessageProcessingStatus::Classified, $message->processing_status);
-        Queue::assertNotPushed(AnalyzeMessageJob::class);
+        $this->assertNull($message->ai_summary);
     }
 
     #[Test]

@@ -2,32 +2,66 @@
 
 namespace Tests\Feature;
 
+use App\AI\Contracts\AiAnalyzer;
+use App\AI\FakeAiAnalyzer;
+use App\Enums\EventType;
 use App\Enums\MessageClassification;
 use App\Enums\MessageProcessingStatus;
 use App\Enums\ProjectStatus;
-use App\Jobs\AnalyzeMessageJob;
+use App\Hermes\ProcessIncomingMessage;
+use App\Jobs\ApplyEventJob;
 use App\Jobs\ClassifyMessageJob;
 use App\Models\Conversation;
+use App\Models\Event;
 use App\Models\Message;
 use App\Models\ProcessingLog;
 use App\Models\Project;
 use App\Models\ProjectMatchingRule;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Bus;
 use Tests\TestCase;
 
 class ClassificationAndMatchingTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->app->instance(AiAnalyzer::class, (new FakeAiAnalyzer)->withPayload([
+            'classification' => 'client',
+            'project_id' => null,
+            'confidence' => 0.9,
+            'event_type' => EventType::ClientQuestion->value,
+            'summary' => 'Тестовый анализ',
+            'requires_manager' => false,
+            'suggested_action' => 'no_action',
+            'draft_reply' => null,
+            'reason' => 'test',
+        ]));
+    }
+
     public function test_client_letter_matching_project_email_sets_client_and_project(): void
     {
-        Queue::fake([AnalyzeMessageJob::class]);
+        Bus::fake([ApplyEventJob::class]);
 
         $project = $this->projectWithRules([
             'client_emails' => ['client@acme.com'],
             'domains' => ['acme.com'],
         ]);
+
+        $this->app->instance(AiAnalyzer::class, (new FakeAiAnalyzer)->withPayload([
+            'classification' => 'client',
+            'project_id' => $project->id,
+            'confidence' => 0.91,
+            'event_type' => EventType::ClientQuestion->value,
+            'summary' => 'Вопрос о доставке',
+            'requires_manager' => true,
+            'suggested_action' => 'reply',
+            'draft_reply' => 'Проверяем сроки.',
+            'reason' => 'client question',
+        ]));
 
         $message = $this->pendingMessage([
             'sender' => 'Client Name <client@acme.com>',
@@ -35,21 +69,30 @@ class ClassificationAndMatchingTest extends TestCase
             'body' => 'When will it ship?',
         ]);
 
-        (new ClassifyMessageJob($message->id))->handle(app(\App\Domain\Classification\ClassifyAndMatchMessage::class));
+        (new ClassifyMessageJob($message->id))->handle(app(ProcessIncomingMessage::class));
 
         $message->refresh();
 
         $this->assertSame(MessageClassification::Client, $message->classification);
         $this->assertSame($project->id, $message->project_id);
-        $this->assertSame(MessageProcessingStatus::Classified, $message->processing_status);
-        $this->assertProcessingSteps($message->id, ['classified', 'project_matched']);
-        Queue::assertPushed(AnalyzeMessageJob::class, fn (AnalyzeMessageJob $job) => $job->messageId === $message->id);
+        $this->assertSame(MessageProcessingStatus::Analyzed, $message->processing_status);
+        $this->assertProcessingSteps($message->id, [
+            'classified',
+            'project_matched',
+            'hermes_pipeline',
+            'hermes_context',
+            'hermes_proposed',
+            'ai_analyzed',
+        ]);
+        $this->assertDatabaseHas('events', [
+            'message_id' => $message->id,
+            'project_id' => $project->id,
+        ]);
+        Bus::assertDispatched(ApplyEventJob::class);
     }
 
     public function test_technical_notification_classified_without_inventing_project(): void
     {
-        Queue::fake([AnalyzeMessageJob::class]);
-
         $this->projectWithRules([
             'client_emails' => ['client@acme.com'],
         ]);
@@ -60,19 +103,19 @@ class ClassificationAndMatchingTest extends TestCase
             'body' => 'You are receiving this because of notifications.',
         ]);
 
-        (new ClassifyMessageJob($message->id))->handle(app(\App\Domain\Classification\ClassifyAndMatchMessage::class));
+        (new ClassifyMessageJob($message->id))->handle(app(ProcessIncomingMessage::class));
 
         $message->refresh();
 
         $this->assertSame(MessageClassification::Technical, $message->classification);
         $this->assertNull($message->project_id);
         $this->assertSame(MessageProcessingStatus::Classified, $message->processing_status);
-        Queue::assertNotPushed(AnalyzeMessageJob::class);
+        $this->assertProcessingSteps($message->id, ['classified', 'project_matched', 'hermes_pipeline', 'hermes_llm_skipped']);
+        $this->assertSame(0, Event::query()->where('message_id', $message->id)->count());
     }
 
     public function test_newsletter_with_list_unsubscribe_header(): void
     {
-        Queue::fake([AnalyzeMessageJob::class]);
 
         $message = $this->pendingMessage([
             'sender' => 'promo@marketing.example',
@@ -84,19 +127,17 @@ class ClassificationAndMatchingTest extends TestCase
             ],
         ]);
 
-        (new ClassifyMessageJob($message->id))->handle(app(\App\Domain\Classification\ClassifyAndMatchMessage::class));
+        (new ClassifyMessageJob($message->id))->handle(app(ProcessIncomingMessage::class));
 
         $message->refresh();
 
         $this->assertSame(MessageClassification::Newsletter, $message->classification);
         $this->assertNull($message->project_id);
         $this->assertSame(MessageProcessingStatus::Classified, $message->processing_status);
-        Queue::assertNotPushed(AnalyzeMessageJob::class);
     }
 
     public function test_unknown_letter_needs_manual_and_null_project(): void
     {
-        Queue::fake([AnalyzeMessageJob::class]);
 
         $this->projectWithRules([
             'client_emails' => ['known@acme.com'],
@@ -109,14 +150,13 @@ class ClassificationAndMatchingTest extends TestCase
             'body' => 'Unrelated content',
         ]);
 
-        (new ClassifyMessageJob($message->id))->handle(app(\App\Domain\Classification\ClassifyAndMatchMessage::class));
+        (new ClassifyMessageJob($message->id))->handle(app(ProcessIncomingMessage::class));
 
         $message->refresh();
 
         $this->assertSame(MessageClassification::Unknown, $message->classification);
         $this->assertNull($message->project_id);
         $this->assertSame(MessageProcessingStatus::NeedsManual, $message->processing_status);
-        Queue::assertNotPushed(AnalyzeMessageJob::class);
     }
 
     public function test_exact_email_match_assigns_project(): void
@@ -176,7 +216,6 @@ class ClassificationAndMatchingTest extends TestCase
 
     public function test_multiple_possible_projects_are_ambiguous_and_need_manual(): void
     {
-        Queue::fake([AnalyzeMessageJob::class]);
 
         $this->projectWithRules([
             'client_emails' => ['shared@client.com'],
@@ -193,7 +232,7 @@ class ClassificationAndMatchingTest extends TestCase
             'body' => 'Help',
         ]);
 
-        (new ClassifyMessageJob($message->id))->handle(app(\App\Domain\Classification\ClassifyAndMatchMessage::class));
+        (new ClassifyMessageJob($message->id))->handle(app(ProcessIncomingMessage::class));
 
         $message->refresh();
 
@@ -201,7 +240,6 @@ class ClassificationAndMatchingTest extends TestCase
         $this->assertNull($message->project_id);
         $this->assertSame(MessageProcessingStatus::NeedsManual, $message->processing_status);
         $this->assertTrue(data_get($message->metadata, 'project_match.ambiguous'));
-        Queue::assertNotPushed(AnalyzeMessageJob::class);
 
         $log = ProcessingLog::query()
             ->where('message_id', $message->id)
@@ -214,7 +252,6 @@ class ClassificationAndMatchingTest extends TestCase
 
     public function test_conversation_project_is_inherited(): void
     {
-        Queue::fake([AnalyzeMessageJob::class]);
 
         $project = Project::factory()->create(['status' => ProjectStatus::Active]);
         $conversation = Conversation::query()->create([
@@ -241,7 +278,7 @@ class ClassificationAndMatchingTest extends TestCase
         $match = app(\App\Domain\Projects\ProjectMatcher::class)->match($message->fresh('conversation'));
         $this->assertSame($project->id, $match->projectId);
 
-        (new ClassifyMessageJob($message->id))->handle(app(\App\Domain\Classification\ClassifyAndMatchMessage::class));
+        (new ClassifyMessageJob($message->id))->handle(app(ProcessIncomingMessage::class));
 
         $message->refresh();
         $this->assertSame($project->id, $message->project_id);
@@ -249,7 +286,6 @@ class ClassificationAndMatchingTest extends TestCase
 
     public function test_technical_project_source_matches_project_without_ai(): void
     {
-        Queue::fake([AnalyzeMessageJob::class]);
 
         $project = $this->projectWithRules([
             'technical_sources' => ['redmine.company.local'],
@@ -261,19 +297,17 @@ class ClassificationAndMatchingTest extends TestCase
             'body' => 'Task updated',
         ]);
 
-        (new ClassifyMessageJob($message->id))->handle(app(\App\Domain\Classification\ClassifyAndMatchMessage::class));
+        (new ClassifyMessageJob($message->id))->handle(app(ProcessIncomingMessage::class));
 
         $message->refresh();
 
         $this->assertSame(MessageClassification::Technical, $message->classification);
         $this->assertSame($project->id, $message->project_id);
         $this->assertSame(MessageProcessingStatus::Classified, $message->processing_status);
-        Queue::assertNotPushed(AnalyzeMessageJob::class);
     }
 
     public function test_redmine_kelnik_subject_matches_project_by_name(): void
     {
-        Queue::fake([AnalyzeMessageJob::class]);
 
         $tekta = $this->projectWithRules(['name' => 'Tekta']);
         $this->projectWithRules(['name' => 'RBI сайт 2025']);
@@ -284,7 +318,7 @@ class ClassificationAndMatchingTest extends TestCase
             'body' => 'Issue #88 was updated.',
         ]);
 
-        (new ClassifyMessageJob($message->id))->handle(app(\App\Domain\Classification\ClassifyAndMatchMessage::class));
+        (new ClassifyMessageJob($message->id))->handle(app(ProcessIncomingMessage::class));
 
         $message->refresh();
 
@@ -294,12 +328,10 @@ class ClassificationAndMatchingTest extends TestCase
             'redmine_subject:Tekta',
             $message->metadata['project_match']['reasons'] ?? [],
         );
-        Queue::assertNotPushed(AnalyzeMessageJob::class);
     }
 
     public function test_redmine_kelnik_subject_matches_rbi_project_name(): void
     {
-        Queue::fake([AnalyzeMessageJob::class]);
 
         $rbi = $this->projectWithRules(['name' => 'RBI сайт 2025']);
 
@@ -309,7 +341,7 @@ class ClassificationAndMatchingTest extends TestCase
             'body' => 'New issue',
         ]);
 
-        (new ClassifyMessageJob($message->id))->handle(app(\App\Domain\Classification\ClassifyAndMatchMessage::class));
+        (new ClassifyMessageJob($message->id))->handle(app(ProcessIncomingMessage::class));
 
         $message->refresh();
 
@@ -318,7 +350,7 @@ class ClassificationAndMatchingTest extends TestCase
 
     public function test_classify_message_job_is_idempotent_when_already_classified(): void
     {
-        Queue::fake([AnalyzeMessageJob::class]);
+        Bus::fake([ApplyEventJob::class]);
 
         $project = $this->projectWithRules([
             'client_emails' => ['once@acme.com'],
@@ -330,9 +362,9 @@ class ClassificationAndMatchingTest extends TestCase
             'body' => 'Body',
         ]);
 
-        $service = app(\App\Domain\Classification\ClassifyAndMatchMessage::class);
-        (new ClassifyMessageJob($message->id))->handle($service);
-        (new ClassifyMessageJob($message->id))->handle($service);
+        $process = app(ProcessIncomingMessage::class);
+        (new ClassifyMessageJob($message->id))->handle($process);
+        (new ClassifyMessageJob($message->id))->handle($process);
 
         $this->assertSame(1, ProcessingLog::query()->where('message_id', $message->id)->where('step', 'classified')->count());
         $this->assertSame($project->id, $message->fresh()->project_id);

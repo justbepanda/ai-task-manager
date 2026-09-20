@@ -12,7 +12,7 @@ class DatabaseSeederSmokeTest extends TestCase
     use RefreshDatabase;
 
     #[Test]
-    public function database_seeder_runs_and_creates_admin_and_demo_data(): void
+    public function database_seeder_runs_and_creates_admin_and_mail_filters(): void
     {
         $this->seed(DatabaseSeeder::class);
 
@@ -20,39 +20,29 @@ class DatabaseSeederSmokeTest extends TestCase
             'email' => 'developer@kelnik.ru',
         ]);
 
-        $this->assertDatabaseHas('projects', [
-            'name' => 'Интернет-магазин А',
-        ]);
-
-        $this->assertDatabaseHas('messages', [
-            'external_id' => 'seed:msg:client-question-1',
-            'source' => 'seed',
-        ]);
-
-        $this->assertDatabaseHas('manager_actions', [
-            'status' => 'pending',
-        ]);
-
         $this->assertDatabaseHas('mail_filter_settings', [
             'id' => 1,
         ]);
 
-        $this->assertDatabaseHas('client_companies', [
-            'name' => 'ООО Ромашка',
+        $this->assertDatabaseHas('app_settings', [
+            'id' => 1,
+            'auto_create_projects' => 1,
+            'auto_assign_projects_llm' => 1,
         ]);
 
-        $this->assertDatabaseHas('executors', [
-            'last_name' => 'Смирнов',
-            'first_name' => 'Алексей',
-        ]);
+        $settings = \App\Models\MailFilterSetting::query()->find(1);
+        $this->assertNotNull($settings);
+        $this->assertContains('noreply@', $settings->blocked_emails);
+        $this->assertContains('id.yandex.com', $settings->blocked_domains);
+        $this->assertContains(
+            \Database\Seeders\MailFilterSettingSeeder::REDMINE_PODDERZHKA_OCENKA_REGEX,
+            $settings->subject_stop_words,
+        );
 
-        // re-runnable
         $this->seed(DatabaseSeeder::class);
 
         $this->assertSame(1, \App\Models\User::query()->where('email', 'developer@kelnik.ru')->count());
-        $this->assertSame(1, \App\Models\Message::query()->where('external_id', 'seed:msg:client-question-1')->count());
         $this->assertSame(1, \App\Models\MailFilterSetting::query()->count());
-        $this->assertSame(1, \App\Models\ClientCompany::query()->where('name', 'ООО Ромашка')->count());
-        $this->assertSame(1, \App\Models\Executor::query()->where('last_name', 'Смирнов')->where('first_name', 'Алексей')->count());
+        $this->assertSame(1, \App\Models\AppSetting::query()->count());
     }
 }

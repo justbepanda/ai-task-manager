@@ -3,8 +3,11 @@
     $board = $board ?? null;
     $groups = $board?->groups ?? [];
     $unmatched = $board?->unmatched ?? [];
-    $attachAction = route('platform.messages.assign', 'attachToProject');
-    $createAction = route('platform.messages.assign', 'createAndAttach');
+    $assignMode = $assignMode ?? 'rules';
+    $hasSuggestion = $hasSuggestion ?? true;
+    $routeBase = $assignMode === 'llm' ? 'platform.messages.assign-llm' : 'platform.messages.assign';
+    $attachAction = route($routeBase, 'attachToProject');
+    $createAction = route($routeBase, 'createAndAttach');
 @endphp
 
 {{--
@@ -43,7 +46,12 @@
 </style>
 
 <div class="assign-board bg-white rounded shadow-sm p-4">
-    @if ($groups === [] && $unmatched === [])
+    @if ($assignMode === 'llm' && ! $hasSuggestion)
+        <p class="empty mb-0">
+            Нажмите «Запросить предложение LLM» вверху — Hermes распределит письма по проектам (до {{ (int) config('ai.assign_suggest.limit', 40) }} шт.).
+            Затем отметьте галочками и привяжите.
+        </p>
+    @elseif ($groups === [] && $unmatched === [])
         <p class="empty mb-0">Нет нераспределённых писем для предложений (или все в «Игнорируемые»).</p>
     @endif
 
@@ -61,7 +69,8 @@
             </h3>
             <p class="meta">
                 @if ($group->isNew)
-                    Проекта ещё нет — письма сгруппированы по теме Redmine.
+                    Проекта ещё нет —
+                    {{ $assignMode === 'llm' ? 'LLM предлагает создать.' : 'письма сгруппированы по теме Redmine.' }}
                     @if ($group->suggestedAliases !== [])
                         Алиасы: {{ implode(', ', array_slice($group->suggestedAliases, 0, 6)) }}
                     @endif
@@ -149,6 +158,7 @@
         </section>
     @endforeach
 
+    @if (! ($assignMode === 'llm' && ! $hasSuggestion))
     <section class="assign-group" data-assign-group="group-unmatched">
         <h3>Без подходящего проекта</h3>
         @if ($unmatched === [])
@@ -213,6 +223,7 @@
             </div>
         @endif
     </section>
+    @endif
 </div>
 
 <script>

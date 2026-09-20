@@ -9,7 +9,7 @@ PHP-образ: **8.4-fpm-bookworm** (8.5 отклонён: расширение
 ```bash
 cp .env.example .env   # если ещё нет .env
 make install           # build, up, composer, migrate, key
-make fresh-seed        # migrate:fresh --seed (admin + demo mailbox)
+make fresh-seed        # migrate:fresh --seed (admin + фильтры почты)
 ```
 
 Админка: [http://localhost/admin/login](http://localhost/admin/login)
@@ -67,26 +67,38 @@ make artisan CMD="mail:sync --sync"
 
 Язык интерфейса: **русский** (`APP_LOCALE=ru`, `APP_FALLBACK_LOCALE=ru`).
 
-Разделы: Обзор, Входящие, Игнорируемые, **Распределение** (массовая привязка к проектам), Фильтры почты (чёрный список), Проекты, **Клиенты**, **Исполнители**, Действия менеджера, Метрики гипотезы, Пользователи/Роли.
+Разделы: Обзор, Входящие, Игнорируемые, **Распределение** (правила / Redmine), **Распределение (LLM)**, Фильтры почты, **Журнал**, **Сервисные команды**, **Настройки** (автосоздание Redmine / автораспределение LLM), Проекты, Клиенты, Исполнители, Действия менеджера, Метрики гипотезы, Пользователи/Роли.
 
-URL распределения: `/admin/messages/assign` (также кнопка «Распределить по проектам» во входящих).
+URL: `/admin/messages/assign` (правила), `/admin/messages/assign-llm` (LLM). Кнопки во входящих.
 
-Доменная логика в сервисах; screens тонкие. AI **не** отправляет письма. Классификация `ignored` — глобальный blacklist (не LLM).
+Доменная логика в сервисах; screens тонкие. Анализ писем — **Hermes** (propose) → Laravel validation → Event / ManagerAction. LLM: Gemini Flash через `LlmProvider`. Hermes **не** отправляет письма. Классификация `ignored` — глобальный blacklist (не LLM).
 
-На карточке письма: журнал `processing_logs` и таблица `analysis_corrections` (секреты в details маскируются).
+На карточке письма: журнал `processing_logs` (в т.ч. `hermes_context` / `hermes_proposed`) и таблица `analysis_corrections` (секреты в details маскируются).
 
 ## Seeds
 
-`DatabaseSeeder`:
+`DatabaseSeeder` вызывает:
 
-1. `AdminUserSeeder` — Orchid admin
-2. `ProjectSeeder` — реалистичные проекты + rules/instructions
-3. `ClientSeeder` — клиенты (компании) + контакты, связь с проектами
-4. `ExecutorSeeder` — исполнители, связь с проектами
-5. `MailFilterSettingSeeder` — дефолтный чёрный список (Яндекс ID / noreply / security subjects)
-6. `DemoMailboxSeeder` — демо-письма (`source=seed`, `external_id` с префиксом `seed:`), events, manager_actions, processing_logs
+1. `AdminUserSeeder` — Orchid admin (`developer@kelnik.ru` / `developer`)
+2. `MailFilterSettingSeeder` — глобальный чёрный список
+3. `AppSettingSeeder` — настройки (автосоздание Redmine и LLM-распределение **вкл.** по умолчанию)
 
-`db:seed` идемпотентен через `updateOrCreate`. `migrate:fresh --seed` очищает БД (включая реальный IMAP-импорт) — после этого можно снова `mail:sync`.
+Остальные сидеры (проекты, демо-почта, клиенты) в репозитории есть, но **не** подключены к `DatabaseSeeder`.
+
+`db:seed` идемпотентен для admin. `migrate:fresh --seed` очищает БД — после этого можно снова `mail:sync`.
+
+## Архитектура Hermes
+
+```text
+Message → Hermes ProcessIncomingMessage
+            ├── classification / project (rules)
+            ├── context
+            ├── [LLM] event / draft / requires_manager
+            └── Laravel validation → Project State / ManagerAction
+Hermes → LlmProvider → Gemini Flash
+```
+
+Подробности: `AGENTS.md` §§2–3, 8, 16; `docs/IMPLEMENTATION_PLAN.md` §3b.
 
 ## Почта (Yandex IMAP)
 
@@ -95,9 +107,13 @@ URL распределения: `/admin/messages/assign` (также кнопк�
 ```env
 YANDEX_IMAP_USERNAME=you@yandex.ru
 YANDEX_IMAP_PASSWORD=xxxx-xxxx-xxxx-xxxx
+YANDEX_IMAP_SYNC_ALL_FOLDERS=true
+YANDEX_IMAP_FOLDER_EXCLUDE=Spam,Junk,Drafts,Draft,Sent,Outbox,Спам,Черновик,Отправленн,Исходящ
 YANDEX_IMAP_FIRST_SYNC_LIMIT=100
 MAIL_SYNC_INTERVAL_MINUTES=5
 ```
+
+По умолчанию синхронизируются **все папки** ящика (пользовательские + Корзина), у каждой свой cursor в `mail_sync_states`. Исключаются спам/черновики/отправленные; Корзину не исключаем. При `YANDEX_IMAP_SYNC_ALL_FOLDERS=false` — только `YANDEX_IMAP_FOLDER` (обычно INBOX).
 
 Ручная синхронизация:
 
@@ -106,12 +122,26 @@ make artisan CMD="mail:sync"
 make artisan CMD="mail:sync --sync"
 ```
 
-Первый запуск импортирует только newest `YANDEX_IMAP_FIRST_SYNC_LIMIT` писем (по умолчанию 100), не весь ящик.
+Первый запуск по каждой папке импортирует только newest `YANDEX_IMAP_FIRST_SYNC_LIMIT` писем (по умолчанию 100), не всю историю папки.
 
 Переобработка после смены правил/проектов:
 
 ```bash
 make artisan CMD="messages:reprocess --reclassify-manual"
+```
+
+После изменения **Фильтров почты** — применить к уже импортированным письмам:
+
+```bash
+make artisan CMD="messages:reprocess --apply-mail-filters"
+# сначала посмотреть число совпадений:
+make artisan CMD="messages:reprocess --apply-mail-filters --dry-run"
+```
+
+Скан «тишины» (follow_up для старых клиентских писем):
+
+```bash
+make artisan CMD="messages:detect-follow-ups --sync"
 ```
 
 ## Phase 8 — реальный ящик и метрики гипотезы

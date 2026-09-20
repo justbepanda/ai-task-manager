@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace App\Orchid\Screens\MailFilter;
 
 use App\Domain\Mail\MailFilterSettingService;
+use App\Jobs\ApplyMailFiltersJob;
 use App\Models\MailFilterSetting;
 use Illuminate\Http\Request;
 use Orchid\Screen\Actions\Button;
+use Orchid\Screen\Actions\Link;
 use Orchid\Screen\Fields\TextArea;
 use Orchid\Screen\Screen;
 use Orchid\Support\Color;
@@ -49,6 +51,14 @@ class MailFilterSettingEditScreen extends Screen
                 ->icon('bs.check-circle')
                 ->method('save')
                 ->type(Color::PRIMARY),
+            Button::make('Пересобрать игнорируемые')
+                ->icon('bs.arrow-clockwise')
+                ->method('rebuildIgnored')
+                ->confirm('Применить текущие (уже сохранённые) фильтры ко всем письмам? Несохранённые правки в форме не учитываются — сначала «Сохранить».')
+                ->type(Color::WARNING),
+            Link::make('Игнорируемые')
+                ->icon('bs.eye-slash')
+                ->route('platform.messages.ignored'),
         ];
     }
 
@@ -68,12 +78,12 @@ class MailFilterSettingEditScreen extends Screen
 
                 TextArea::make('settings.subject_stop_words_text')
                     ->title('Стоп-слова в теме')
-                    ->help('Регистронезависимый поиск подстроки в теме письма.')
+                    ->help('Подстрока в теме (без учёта регистра) или regex:… например regex:/\[Поддержка\s*-[^\]]*\].*Оценка:\s+\S+/u')
                     ->rows(8),
 
                 TextArea::make('settings.body_stop_words_text')
                     ->title('Стоп-слова в тексте')
-                    ->help('Регистронезависимый поиск в начале тела письма.')
+                    ->help('Подстрока в начале тела или regex:/…/u')
                     ->rows(8),
             ])->title('Чёрный список'),
         ];
@@ -98,5 +108,12 @@ class MailFilterSettingEditScreen extends Screen
         ]);
 
         Toast::info('Фильтры почты сохранены.');
+    }
+
+    public function rebuildIgnored(): void
+    {
+        ApplyMailFiltersJob::dispatch(userId: auth()->id());
+
+        Toast::info('Пересборка игнорируемых поставлена в очередь. Смотрите «Журнал» и список «Игнорируемые» после worker’а.');
     }
 }

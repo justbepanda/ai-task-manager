@@ -5,6 +5,7 @@ namespace App\Domain\Events;
 use App\Enums\EventType;
 use App\Enums\ManagerActionStatus;
 use App\Enums\ManagerActionType;
+use App\Enums\MessageClassification;
 use App\Enums\MessageProcessingStatus;
 use App\Enums\ProjectStatus;
 use App\Models\Event;
@@ -215,6 +216,11 @@ class ApplyProjectEventService
 
         $requiresManager = (bool) ($message?->requires_manager ?? $payload['requires_manager'] ?? false);
         $suggested = $this->resolveSuggestedAction($payload);
+
+        // Ignored mail (global blacklist) must not create manager work items.
+        if ($message?->classification === MessageClassification::Ignored) {
+            return null;
+        }
 
         $needsHuman = $requiresManager
             || in_array($suggested, [

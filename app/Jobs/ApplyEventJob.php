@@ -4,11 +4,11 @@ namespace App\Jobs;
 
 use App\Domain\Events\ApplyProjectEventService;
 use App\Models\Event;
-use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Contracts\Queue\ShouldQueueAfterCommit;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
 
-class ApplyEventJob implements ShouldQueue
+class ApplyEventJob implements ShouldQueueAfterCommit
 {
     use Queueable;
 

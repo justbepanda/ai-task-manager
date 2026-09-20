@@ -89,6 +89,81 @@ class MailFilterMatcherTest extends TestCase
     }
 
     #[Test]
+    public function subject_stop_word_ocenka_matches_podderzhka_person_name(): void
+    {
+        MailFilterSetting::query()->create([
+            'id' => 1,
+            'blocked_emails' => [],
+            'blocked_domains' => [],
+            'subject_stop_words' => [
+                \Database\Seeders\MailFilterSettingSeeder::REDMINE_PODDERZHKA_OCENKA_REGEX,
+            ],
+            'body_stop_words' => [],
+        ]);
+
+        $ignored = Message::factory()->create([
+            'sender' => 'redmine@kelnik.pro',
+            'subject' => '[Поддержка - Bug #98322] (Обратная связь) Оценка: Юрий Устинов',
+            'body' => 'Issue updated',
+            'processing_status' => MessageProcessingStatus::Pending,
+        ]);
+
+        $keep = Message::factory()->create([
+            'sender' => 'redmine@kelnik.pro',
+            'subject' => '[Tekta, Текта, ЛК клиента и брокера, поддержка - Support #99435] Оценка: ЛК Брокера | Карточка клиента (2)',
+            'body' => 'Issue updated',
+            'processing_status' => MessageProcessingStatus::Pending,
+        ]);
+
+        $ignoredResult = app(MessageClassifier::class)->classify($ignored);
+        $keepResult = app(MessageClassifier::class)->classify($keep);
+
+        $this->assertSame(MessageClassification::Ignored, $ignoredResult->classification);
+        $this->assertNotSame(MessageClassification::Ignored, $keepResult->classification);
+    }
+
+    #[Test]
+    public function subject_stop_word_ignores_lead_forms_but_not_redmine_feedback(): void
+    {
+        MailFilterSetting::query()->create([
+            'id' => 1,
+            'blocked_emails' => [],
+            'blocked_domains' => [],
+            'subject_stop_words' => [
+                'Заявка на обратный звонок',
+                'Заказ обратного звонка',
+                'Заявка на бронирование',
+                'Заявка на рассрочку',
+                'Заявка на обратную связь',
+            ],
+            'body_stop_words' => [],
+        ]);
+
+        $matcher = app(MailFilterMatcher::class);
+
+        $this->assertNotNull($matcher->matchParts(
+            sender: 'noreply@rbi.ru',
+            subject: 'Заявка на обратный звонок',
+            body: '',
+        ));
+        $this->assertNotNull($matcher->matchParts(
+            sender: 'noreply@rbi.ru',
+            subject: 'Заказ обратного звонка',
+            body: '',
+        ));
+        $this->assertNotNull($matcher->matchParts(
+            sender: 'LK@tekta.com',
+            subject: 'Новая заявка на обратную связь',
+            body: '',
+        ));
+        $this->assertNull($matcher->matchParts(
+            sender: 'redmine@kelnik.pro',
+            subject: '[RBI, РБИ - Support #99139] (Обратная связь) Пропуск выбора этажа',
+            body: '',
+        ));
+    }
+
+    #[Test]
     public function matcher_returns_null_when_no_rule_hits(): void
     {
         MailFilterSetting::query()->create([

@@ -15,7 +15,8 @@ class ProjectListScreen extends Screen
     {
         return [
             'projects' => Project::query()
-                ->with(['instruction', 'matchingRule'])
+                ->with(['instruction', 'matchingRule', 'managerExecutor'])
+                ->withCount('messages')
                 ->latest('id')
                 ->paginate(),
         ];

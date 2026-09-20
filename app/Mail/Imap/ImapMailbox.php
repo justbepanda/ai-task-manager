@@ -51,6 +51,50 @@ class ImapMailbox
         $this->connection = $connection;
     }
 
+    public function reopen(string $folder): void
+    {
+        $ok = @imap_reopen($this->connection(), $this->mailboxString($folder), OP_READONLY);
+
+        if ($ok === false) {
+            throw new MailProviderException(
+                'Failed to reopen IMAP folder '.$folder.': '.$this->lastError()
+            );
+        }
+    }
+
+    /**
+     * @return list<string> Folder names relative to mailbox root (e.g. INBOX, Projects/Foo).
+     */
+    public function listFolderNames(): array
+    {
+        $root = $this->mailboxRoot();
+        $listed = @imap_list($this->connection(), $root, '*');
+
+        if ($listed === false) {
+            return [(string) ($this->config['folder'] ?? 'INBOX')];
+        }
+
+        $folders = [];
+        foreach ($listed as $fullName) {
+            $fullName = (string) $fullName;
+            if (! str_starts_with($fullName, $root)) {
+                continue;
+            }
+
+            $name = substr($fullName, strlen($root));
+            if ($name === false || $name === '') {
+                continue;
+            }
+
+            $folders[] = $name;
+        }
+
+        $folders = array_values(array_unique($folders));
+        sort($folders);
+
+        return $folders === [] ? [(string) ($this->config['folder'] ?? 'INBOX')] : $folders;
+    }
+
     public function getUidValidity(): int
     {
         $check = imap_check($this->connection());
@@ -126,12 +170,17 @@ class ImapMailbox
 
     private function mailboxString(string $folder): string
     {
+        return $this->mailboxRoot().$folder;
+    }
+
+    private function mailboxRoot(): string
+    {
         $host = $this->config['host'];
         $port = (int) $this->config['port'];
         $encryption = strtolower((string) ($this->config['encryption'] ?? 'ssl'));
         $flags = $encryption === 'ssl' ? '/imap/ssl' : '/imap/tls';
 
-        return sprintf('{%s:%d%s}%s', $host, $port, $flags, $folder);
+        return sprintf('{%s:%d%s}', $host, $port, $flags);
     }
 
     /** @return resource|\IMAP\Connection */

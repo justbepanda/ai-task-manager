@@ -131,6 +131,7 @@ class MailSyncTest extends TestCase
         $result = app(SyncMailService::class)->sync(MailSource::Yandex);
 
         $this->assertSame(2, $result['imported']);
+        $this->assertSame(1, $result['folders']);
         $this->assertSame(25, $result['last_uid']);
         $this->assertDatabaseCount('messages', 2);
 
@@ -140,6 +141,31 @@ class MailSyncTest extends TestCase
         $this->assertNotNull($state->last_synced_at);
 
         Queue::assertPushed(ClassifyMessageJob::class, 2);
+    }
+
+    public function test_sync_imports_from_multiple_folders_including_trash(): void
+    {
+        Queue::fake();
+
+        $fake = new FakeMailProvider(
+            messages: [
+                $this->sampleMessage('inbox@example.com', 10, folder: 'INBOX'),
+                $this->sampleMessage('project@example.com', 3, folder: 'Projects/Alpha'),
+                $this->sampleMessage('trash@example.com', 7, folder: 'Trash'),
+            ],
+            folders: ['INBOX', 'Projects/Alpha', 'Trash'],
+        );
+        $this->app->instance(MailProvider::class, $fake);
+
+        $result = app(SyncMailService::class)->sync(MailSource::Yandex);
+
+        $this->assertSame(3, $result['imported']);
+        $this->assertSame(3, $result['folders']);
+        $this->assertDatabaseCount('messages', 3);
+        $this->assertDatabaseHas('mail_sync_states', ['provider' => 'yandex', 'folder' => 'INBOX', 'last_uid' => 10]);
+        $this->assertDatabaseHas('mail_sync_states', ['provider' => 'yandex', 'folder' => 'Projects/Alpha', 'last_uid' => 3]);
+        $this->assertDatabaseHas('mail_sync_states', ['provider' => 'yandex', 'folder' => 'Trash', 'last_uid' => 7]);
+        Queue::assertPushed(ClassifyMessageJob::class, 3);
     }
 
     public function test_sync_skips_already_seen_uids_via_fake_provider(): void
@@ -176,10 +202,15 @@ class MailSyncTest extends TestCase
         ]);
         $this->app->instance(MailProvider::class, $fake);
 
-        (new SyncYandexMailJob)->handle(app(SyncMailService::class));
+        $this->app->call([new SyncYandexMailJob, 'handle']);
 
         $this->assertDatabaseHas('messages', ['external_id' => 'job@example.com']);
         Queue::assertPushed(ClassifyMessageJob::class, 1);
+        $this->assertDatabaseHas('activity_logs', [
+            'category' => 'mail',
+            'action' => 'sync',
+            'status' => 'ok',
+        ]);
     }
 
     public function test_mail_sync_command_dispatches_job_by_default(): void
@@ -240,7 +271,7 @@ class MailSyncTest extends TestCase
         $this->assertSame($root['message']->conversation_id, $reply['message']->conversation_id);
     }
 
-    private function sampleMessage(string $externalId, int $uid, array $extraHeaders = []): NormalizedIncomingMessage
+    private function sampleMessage(string $externalId, int $uid, array $extraHeaders = [], string $folder = 'INBOX'): NormalizedIncomingMessage
     {
         return new NormalizedIncomingMessage(
             source: MailSource::Yandex,
@@ -258,7 +289,7 @@ class MailSyncTest extends TestCase
             ], $extraHeaders),
             metadata: [
                 'imap_uid' => $uid,
-                'folder' => 'INBOX',
+                'folder' => $folder,
                 'uidvalidity' => 1,
             ],
             rawHeaders: "Message-ID: <{$externalId}>\r\nFrom: sender@example.com\r\n",
