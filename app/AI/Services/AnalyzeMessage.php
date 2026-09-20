@@ -2,13 +2,15 @@
 
 namespace App\AI\Services;
 
-use App\AI\Contracts\AiAnalyzer;
 use App\AI\DTO\AnalysisResult;
 use App\AI\Exceptions\AnalysisException;
 use App\AI\Exceptions\AnalysisValidationException;
 use App\Domain\Metrics\HypothesisMetricsRecorder;
+use App\Domain\Projects\RedmineMailPeopleExtractor;
 use App\Enums\MessageClassification;
 use App\Enums\MessageProcessingStatus;
+use App\Hermes\Contracts\HermesAgent;
+use App\Hermes\DTO\StructuredAgentResult;
 use App\Jobs\ApplyEventJob;
 use App\Models\Event;
 use App\Models\Message;
@@ -21,20 +23,22 @@ use Throwable;
 class AnalyzeMessage
 {
     public function __construct(
-        private readonly BuildMessageContext $buildMessageContext,
-        private readonly AiAnalyzer $analyzer,
+        private readonly HermesAgent $hermes,
         private readonly AnalysisResultValidator $validator,
         private readonly HypothesisMetricsRecorder $metrics,
+        private readonly RedmineMailPeopleExtractor $redminePeople,
     ) {}
 
     public function handle(Message $message): ?Event
     {
-        $context = $this->buildMessageContext->handle($message);
         $rawPayload = null;
 
         try {
-            $rawPayload = $this->analyzer->analyze($context);
-            $result = $this->validator->validate($rawPayload, $context);
+            $proposal = $this->hermes->propose($message);
+            $rawPayload = $proposal->payload;
+            $result = $this->validator->validate($rawPayload, $proposal->context);
+            // Explicit Hermes → Laravel boundary type (same fields as AnalysisResult).
+            $result = StructuredAgentResult::fromAnalysisResult($result)->toAnalysisResult();
         } catch (AnalysisValidationException $e) {
             $this->markFailed($message, $e->getMessage(), $e->errorType, $rawPayload);
 
@@ -44,7 +48,7 @@ class AnalyzeMessage
 
             return null;
         } catch (Throwable $e) {
-            $this->markFailed($message, 'AI analysis failed', 'unexpected_error', $rawPayload);
+            $this->markFailed($message, 'Hermes analysis failed', 'unexpected_error', $rawPayload);
             Log::error('AnalyzeMessage unexpected error', [
                 'message_id' => $message->id,
                 'error' => $e->getMessage(),
@@ -72,12 +76,17 @@ class AnalyzeMessage
             // Never invent a project: only set from validated result when message has none.
             $projectId = $message->project_id ?? $result->projectId;
 
+            $requiresManager = $result->requiresManager;
+            if ($this->redminePeople->subjectRequiresFeedback((string) ($message->subject ?? ''))) {
+                $requiresManager = true;
+            }
+
             $message->fill([
                 'classification' => $classification,
                 'project_id' => $projectId,
                 'ai_summary' => $result->summary,
                 'ai_confidence' => $result->confidence,
-                'requires_manager' => $result->requiresManager,
+                'requires_manager' => $requiresManager,
                 'processing_status' => MessageProcessingStatus::Analyzed,
                 'processing_error' => null,
             ]);
@@ -95,7 +104,7 @@ class AnalyzeMessage
                     'confidence' => $result->confidence,
                     'event_type' => $result->eventType->value,
                     'summary' => $result->summary,
-                    'requires_manager' => $result->requiresManager,
+                    'requires_manager' => $requiresManager,
                     'suggested_action' => $result->suggestedAction->value,
                     'draft_reply' => $result->draftReply,
                     'reason' => $result->reason,
@@ -112,15 +121,16 @@ class AnalyzeMessage
                     'event_id' => $event->id,
                     'event_type' => $result->eventType->value,
                     'confidence' => $result->confidence,
-                    'requires_manager' => $result->requiresManager,
+                    'requires_manager' => $requiresManager,
                     'suggested_action' => $result->suggestedAction->value,
                     'project_id' => $projectId,
                     'ai_model' => (string) config('ai.gemini.model', 'unknown'),
+                    'agent' => 'hermes',
                     'ai_response' => SensitiveDataSanitizer::truncateJson($rawPayload),
                 ]),
             ]);
 
-            if ($result->requiresManager) {
+            if ($requiresManager) {
                 $this->metrics->record('event_requires_manager', [
                     'event_type' => $result->eventType->value,
                 ], $message, projectId: $projectId);

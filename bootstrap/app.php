@@ -1,5 +1,6 @@
 <?php
 
+use App\Jobs\DetectClientFollowUpsJob;
 use App\Jobs\SyncYandexMailJob;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Application;
@@ -18,12 +19,17 @@ return Application::configure(basePath: dirname(__DIR__))
     })
     ->withSchedule(function (Schedule $schedule): void {
         $minutes = max(1, (int) config('mail_providers.sync_interval_minutes', 5));
-        $event = $schedule->job(new SyncYandexMailJob);
+        $mailSync = $schedule->job(new SyncYandexMailJob);
 
         if ($minutes === 1) {
-            $event->everyMinute();
+            $mailSync->everyMinute();
         } else {
-            $event->cron("*/{$minutes} * * * *");
+            $mailSync->cron("*/{$minutes} * * * *");
+        }
+
+        if ((bool) config('ai.follow_up.enabled', true)) {
+            $hour = max(0, min(23, (int) config('ai.follow_up.schedule_hour', 9)));
+            $schedule->job(new DetectClientFollowUpsJob)->dailyAt(sprintf('%02d:00', $hour));
         }
     })
     ->withExceptions(function (Exceptions $exceptions): void {

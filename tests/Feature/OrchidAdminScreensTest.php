@@ -8,6 +8,8 @@ use App\Enums\ManagerActionType;
 use App\Enums\MessageClassification;
 use App\Enums\MessageProcessingStatus;
 use App\Enums\ProjectStatus;
+use App\Jobs\ApplyMailFiltersJob;
+use App\Jobs\SyncYandexMailJob;
 use App\Models\ClientCompany;
 use App\Models\ClientContact;
 use App\Models\Event;
@@ -16,6 +18,7 @@ use App\Models\ManagerAction;
 use App\Models\Message;
 use App\Models\Project;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
@@ -44,7 +47,8 @@ class OrchidAdminScreensTest extends TestCase
             ->actingAs($admin)
             ->display()
             ->assertOk()
-            ->assertSee('Проекты');
+            ->assertSee('Проекты')
+            ->assertSee('Входящие');
 
         $this->screen('platform.projects.create')
             ->actingAs($admin)
@@ -105,6 +109,38 @@ class OrchidAdminScreensTest extends TestCase
     }
 
     #[Test]
+    public function admin_can_save_app_settings(): void
+    {
+        $admin = $this->makeAdmin();
+
+        $this->screen('platform.settings')
+            ->actingAs($admin)
+            ->display()
+            ->assertOk()
+            ->assertSee('Настройки')
+            ->assertSee('Автоматически создавать проекты')
+            ->assertSee('Автоматически распределять через LLM');
+
+        $this->screen('platform.settings')
+            ->actingAs($admin)
+            ->method('save', [
+                'settings' => [
+                    'auto_create_projects' => '1',
+                    'auto_create_confidence_threshold' => '0.90',
+                    'auto_assign_projects_llm' => '1',
+                    'auto_assign_llm_confidence_threshold' => '0.85',
+                ],
+            ])
+            ->assertOk();
+
+        $settings = \App\Models\AppSetting::current();
+        $this->assertTrue($settings->auto_create_projects);
+        $this->assertEqualsWithDelta(0.90, $settings->auto_create_confidence_threshold, 0.001);
+        $this->assertTrue($settings->auto_assign_projects_llm);
+        $this->assertEqualsWithDelta(0.85, $settings->auto_assign_llm_confidence_threshold, 0.001);
+    }
+
+    #[Test]
     public function admin_can_save_mail_filter_settings(): void
     {
         $admin = $this->makeAdmin();
@@ -135,6 +171,26 @@ class OrchidAdminScreensTest extends TestCase
     }
 
     #[Test]
+    public function admin_can_dispatch_mail_sync_from_inbox(): void
+    {
+        Queue::fake([SyncYandexMailJob::class]);
+        $admin = $this->makeAdmin();
+
+        $this->screen('platform.messages')
+            ->actingAs($admin)
+            ->display()
+            ->assertOk()
+            ->assertSee('Синхронизировать почту');
+
+        $this->screen('platform.messages')
+            ->actingAs($admin)
+            ->method('syncMail')
+            ->assertOk();
+
+        Queue::assertPushed(SyncYandexMailJob::class);
+    }
+
+    #[Test]
     public function admin_can_open_ignored_messages_list(): void
     {
         $admin = $this->makeAdmin();
@@ -151,7 +207,33 @@ class OrchidAdminScreensTest extends TestCase
             ->display()
             ->assertOk()
             ->assertSee('Игнорируемые')
-            ->assertSee('Ignored password mail');
+            ->assertSee('Ignored password mail')
+            ->assertSee('Пересобрать игнорируемые');
+    }
+
+    #[Test]
+    public function admin_can_rebuild_ignored_from_ignored_list_and_mail_filters(): void
+    {
+        Queue::fake([ApplyMailFiltersJob::class]);
+        $admin = $this->makeAdmin();
+
+        $this->screen('platform.messages.ignored')
+            ->actingAs($admin)
+            ->method('rebuildIgnored')
+            ->assertOk();
+
+        $this->screen('platform.mail-filters')
+            ->actingAs($admin)
+            ->display()
+            ->assertOk()
+            ->assertSee('Пересобрать игнорируемые');
+
+        $this->screen('platform.mail-filters')
+            ->actingAs($admin)
+            ->method('rebuildIgnored')
+            ->assertOk();
+
+        Queue::assertPushed(ApplyMailFiltersJob::class, 2);
     }
 
     #[Test]
@@ -195,6 +277,12 @@ class OrchidAdminScreensTest extends TestCase
             ->assertOk()
             ->assertSee('ООО Экран')
             ->assertSee('Тестов Контакт');
+
+        $this->screen('platform.client-companies.create')
+            ->actingAs($admin)
+            ->display()
+            ->assertOk()
+            ->assertSee('Новый клиент');
 
         $this->screen('platform.client-companies.create')
             ->actingAs($admin)

@@ -136,6 +136,25 @@ class ApplyProjectEventTest extends TestCase
     }
 
     #[Test]
+    public function does_not_create_manager_action_for_ignored_message(): void
+    {
+        $project = Project::factory()->create();
+        $message = $this->analyzedMessage($project, confidence: 0.95, requiresManager: true);
+        $message->update(['classification' => MessageClassification::Ignored]);
+        $event = $this->makeEvent($message, $project, EventType::ClientRequest, 0.95, [
+            'requires_manager' => true,
+            'suggested_action' => 'follow_up',
+            'reason' => 'Site lead',
+        ]);
+
+        $result = app(ApplyProjectEventService::class)->handle($event);
+
+        $this->assertTrue($result['applied']);
+        $this->assertNull($result['manager_action_id']);
+        $this->assertSame(0, ManagerAction::query()->count());
+    }
+
+    #[Test]
     public function does_not_duplicate_pending_manager_action_for_same_event(): void
     {
         $project = Project::factory()->create();

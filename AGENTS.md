@@ -23,20 +23,38 @@
 ```text
 Источник
   ↓
-Нормализованное событие
+Нормализованное Message
   ↓
-Идентификация проекта / диалога
+Hermes Agent
+  ├── classification
+  ├── project identification
+  ├── context retrieval
+  ├── event detection
+  ├── manager participation decision
+  └── draft generation
   ↓
-Определение смысла
+Structured Agent Result
   ↓
-Изменение состояния проекта
+Laravel validation
   ↓
-AI-предложение менеджеру
+Project State / Manager Action
+```
+
+Кратко:
+
+```text
+Hermes
+  ↓
+«Я считаю, что произошло X»
+  ↓
+Laravel проверяет
+  ↓
+Laravel применяет изменение
 ```
 
 Не связывать почтовую интеграцию напрямую с бизнес-логикой проекта.
 
-Каждый внешний источник должен преобразовываться во внутреннее нормализованное событие.
+Каждый внешний источник должен преобразовываться во внутреннее нормализованное сообщение (`Message`).
 
 В будущем должна быть возможность добавить другие источники:
 
@@ -52,20 +70,52 @@ AI-предложение менеджеру
 
 ------
 
-## 3. Главный принцип MVP
+## 3. Главный принцип MVP — Hermes
 
-AI не должен напрямую изменять базу данных.
+**Hermes** — ограниченный агент анализа писем. Он предлагает, Laravel решает и пишет.
 
-AI формирует структурированный результат анализа.
+### Hermes может
+
+- читать письмо;
+- получать контекст (диалог, проект, инструкции, недавние события);
+- искать / сопоставлять проекты (в т.ч. через детерминированные правила как tools);
+- анализировать письмо;
+- предлагать изменение состояния (через Event);
+- формировать draft ответа;
+- создавать поля предложения менеджеру (`ManagerAction`).
+
+### Hermes не может
+
+- самостоятельно отправить письмо;
+- удалить письмо;
+- изменить критичные данные без валидации Laravel;
+- выполнять произвольные команды на сервере.
+
+Hermes **не** изменяет базу данных напрямую.
+
+Hermes формирует **Structured Agent Result**.
 
 Затем приложение:
 
 1. валидирует результат;
 2. проверяет допустимость действий;
-3. преобразует результат в доменное событие;
-4. изменяет состояние проекта через обычную бизнес-логику.
+3. преобразует результат в доменное событие (`Event`);
+4. изменяет состояние проекта через обычную бизнес-логику;
+5. при необходимости создаёт `ManagerAction`.
 
-AI является компонентом анализа и подготовки предложений, а не источником истины.
+Hermes — компонент анализа и подготовки предложений, а не источник истины.
+
+Стек вызова LLM:
+
+```text
+Hermes
+  │
+  └── LlmProvider
+         │
+         └── Gemini Flash   (MVP; сменяемый)
+```
+
+Бизнес-логику не привязывать к Gemini: меняется только `LlmProvider`.
 
 ------
 
@@ -355,9 +405,9 @@ project_id = null
 
 ------
 
-# 8. AI-анализ
+# 8. Hermes-анализ (Structured Agent Result)
 
-AI должен получать только необходимый контекст.
+Hermes должен получать только необходимый контекст.
 
 В контекст могут входить:
 
@@ -365,11 +415,12 @@ AI должен получать только необходимый конте�
 - предыдущие сообщения текущего диалога;
 - информация о проекте;
 - инструкции проекта;
-- последние релевантные события проекта.
+- последние релевантные события проекта;
+- кандидаты проектов (после детерминированного отбора).
 
 Не передавать весь почтовый ящик целиком.
 
-AI должен возвращать строго структурированный результат.
+Hermes должен возвращать строго структурированный результат (Structured Agent Result).
 
 Пример:
 
@@ -387,9 +438,11 @@ AI должен возвращать строго структурированн
 }
 ```
 
-Ответ AI обязательно валидировать.
+Ответ Hermes обязательно валидировать в Laravel.
 
-Если AI возвращает некорректный JSON или неизвестное значение enum — считать анализ неуспешным и сохранять ошибку обработки.
+Если возвращается некорректный JSON или неизвестное значение enum — считать анализ неуспешным и сохранять ошибку обработки.
+
+Детерминированные правила (классификация technical/ignored, точный email→проект) могут выполняться **до** или **как tools внутри** Hermes, чтобы не слать лишние запросы в LLM (§17, §22).
 
 ------
 
@@ -424,14 +477,18 @@ AI должен возвращать строго структурированн
 ```text
 Message
  ↓
-AI analysis
+Hermes Agent
+ ↓
+Structured Agent Result
+ ↓
+Laravel validation
  ↓
 Event: client_reported_bug
  ↓
-Project state updated
+Project state updated / ManagerAction
 ```
 
-Не изменять Project непосредственно из AI-класса.
+Не изменять Project непосредственно из класса Hermes / LLM.
 
 Использовать отдельный application/domain service.
 
@@ -547,6 +604,17 @@ CRUD проектов в Orchid.
 массовая привязка и создание проекта + привязка (`SuggestUnassignedMessageAssignments`, `BulkAttachMessagesToProject`).
 Ссылка в commandBar входящих и пункт меню «Распределение» под «Почта».
 
+Hermes LLM вызывается для:
+- `client` / `unknown` с `project_id` **или** с кандидатами `ProjectMatcher` (ambiguous/unmatched);
+- `technical` с известным `project_id` (режим `technical_summary` — краткий summary без draft).
+
+В контекст Hermes также входят `analysis_corrections` письма и недавние правки по проекту.
+
+Ежедневно (scheduler) `DetectClientFollowUpsJob` создаёт `ManagerAction` типа `follow_up`, если последнее письмо в диалоге — клиентское и старше `ai.follow_up.silence_days` (по умолчанию 3). CLI: `messages:detect-follow-ups`.
+
+Экран **«Сервисные команды»** (`platform.admin-tools`, `/admin/admin-tools`):
+кнопки для artisan (`mail:sync`, `messages:reprocess`, `--apply-mail-filters`, `messages:detect-follow-ups`, `messages:repair-bodies`, метрики) с описанием «что / когда»; результат в UI и в Журнале.
+
 ------
 
 ## Mail filters / Чёрный список
@@ -559,6 +627,28 @@ CRUD проектов в Orchid.
 Orchid: «Фильтры почты» (`platform.mail-filters`), список «Игнорируемые» (`platform.messages.ignored`).
 Детерминированный `MailFilterMatcher` применяется **до** technical/newsletter/client.
 Из карточки письма: кнопка «В чёрный список».
+
+------
+
+## Настройки
+
+Singleton `app_settings` (`AppSetting` / `AppSettingService`), экран Orchid «Настройки» (`platform.settings`, `/admin/settings`):
+
+- переключатель **автоматически создавать проекты (Redmine)** + порог уверенности;
+- переключатель **автоматически распределять через LLM** (любые нераспределённые письма) + порог уверенности LLM.
+
+Порядок при обеих галочках:
+
+1. `ProjectMatcher` (правила);
+2. `AutoCreateProjectFromIncomingMail` (Redmine, без LLM);
+3. если проект всё ещё `null` — `AutoAssignProjectViaLlm` (привязка к существующему или создание по `proposed_name`, только если `confidence` ≥ порога);
+4. `ApplyRedminePeopleToProject`: из тела `Автор:` → менеджер проекта (`projects.manager_executor_id` + executor), `Назначена:`/`Назначен:` → исполнитель проекта;
+5. если есть проект (или кандидаты для client/unknown) — Hermes-анализ: summary / event / requires_manager / confidence;
+6. тема с `(Обратная связь)` → `requires_manager=true` (+ ManagerAction, если Event ещё нет).
+
+После включения галочек для уже классифицированных писем без проекта: `messages:reprocess --reclassify-unassigned` (кнопка в «Сервисные команды»). Queue worker периодически перезапускается (`--max-jobs=50`).
+
+LLM проекты не создаёт в обход порога; ignored не обрабатывается.
 
 ------
 
@@ -584,7 +674,7 @@ Draft ответа
 Отклонить
 ```
 
-Доменная логика — в сервисах (`ProjectService`, `ClientCompanyService`, `ClientContactService`, `ExecutorService`, `MessageManualOverrideService`, `ManagerActionService`, `MailFilterSettingService`, `SuggestUnassignedMessageAssignments`, `BulkAttachMessagesToProject`), не в Orchid screens.
+Доменная логика — в сервисах (`ProjectService`, `ClientCompanyService`, `ClientContactService`, `ExecutorService`, `MessageManualOverrideService`, `ManagerActionService`, `MailFilterSettingService`, `AppSettingService`, `AutoCreateProjectFromIncomingMail`, `AutoAssignProjectViaLlm`, `SuggestUnassignedMessageAssignments`, `SuggestUnassignedMessageAssignmentsWithLlm`, `BulkAttachMessagesToProject`), не в Orchid screens.
 
 ------
 
@@ -655,8 +745,13 @@ YANDEX_IMAP_PORT=993
 YANDEX_IMAP_ENCRYPTION=ssl
 YANDEX_IMAP_USERNAME=
 YANDEX_IMAP_PASSWORD=
+YANDEX_IMAP_FOLDER=INBOX
+YANDEX_IMAP_SYNC_ALL_FOLDERS=true
+YANDEX_IMAP_FOLDER_EXCLUDE=Spam,Junk,Drafts,Draft,Sent,Outbox,Спам,Черновик,Отправленн,Исходящ
+YANDEX_IMAP_FIRST_SYNC_LIMIT=100
 ```
 
+Синхронизация обходит **все папки** ящика (включая пользовательские и Корзину), у каждой свой `mail_sync_states.last_uid`. Исключаются спам/черновики/отправленные (см. `YANDEX_IMAP_FOLDER_EXCLUDE`). `YANDEX_IMAP_FOLDER` — стартовая папка для listing; при `SYNC_ALL_FOLDERS=false` синхронизируется только она.
 Фактические параметры подключения проверить по актуальной документации Яндекс.Почты перед реализацией.
 
 Не логировать пароль или другие секреты.
@@ -673,18 +768,14 @@ YANDEX_IMAP_PASSWORD=
 
 ```text
 Sync Yandex Mail
-    ↓
+  ↓
 Store Message
-    ↓
-Classify Message Job
-    ↓
-Identify Project Job
-    ↓
-Analyze Message Job
-    ↓
-Apply Event Job
-    ↓
-Create Manager Action
+  ↓
+Classify Message Job (= Hermes ProcessIncomingMessage)
+  ├── classification + project identification (rules)
+  ├── context retrieval
+  ├── event detection + draft (LLM, если нужно)
+  └── Laravel validation → Event / ManagerAction
 ```
 
 Конкретное количество Job можно изменить, если это упрощает архитектуру.
@@ -717,33 +808,42 @@ AI-запросы и ответы логировать таким образом
 
 ------
 
-# 16. AI Provider
+# 16. Hermes + LLM Provider
 
 Не привязывать бизнес-логику к Gemini.
 
-Создать интерфейс примерно следующего уровня:
+Слой агента:
 
 ```php
-interface AiAnalyzer
+interface HermesAgent
 {
-    public function analyze(MessageContext $context): AnalysisResult;
+    public function propose(Message $message): HermesProposal;
 }
 ```
 
-Создать реализацию для выбранного LLM provider.
+Слой модели (сменяемый):
 
-На первом этапе допустимо использовать Gemini Flash.
+```php
+interface LlmProvider
+{
+    public function analyze(MessageContext $context): array;
+}
+```
 
-В будущем должна быть возможность заменить:
+На первом этапе `LlmProvider` = **Gemini Flash**.
+
+В будущем заменить:
 
 ```text
-Gemini
+Gemini Flash
 → OpenAI
 → Claude
 → другая модель
 ```
 
-без изменения Project, Message, Event и ManagerAction.
+без изменения Project, Message, Event, ManagerAction и без изменения контракта Hermes.
+
+`AiAnalyzer` — устаревший alias `LlmProvider` (совместимость); новый код зависит от `HermesAgent` / `LlmProvider`.
 
 ------
 
@@ -831,7 +931,7 @@ AI использовать там, где требуется понимание
 - WhatsApp;
 - полноценный CRM;
 - сложный workflow engine;
-- автономного AI-агента с правом выполнять произвольные действия;
+- автономного AI-агента с правом выполнять произвольные действия (Hermes — только propose + валидация Laravel);
 - сложную аналитику;
 - RAG/vector database;
 - fine-tuning;
@@ -1058,13 +1158,13 @@ project_id = null
 - правила технических источников;
 - определение кандидатов проектов.
 
-### Phase 4 — AI
+### Phase 4 — Hermes + LLM
 
-- AI provider interface;
-- Gemini implementation;
-- structured output;
-- AI analysis;
-- сохранение результата.
+- `HermesAgent` + `DefaultHermesAgent`;
+- `LlmProvider` interface;
+- Gemini Flash implementation;
+- Structured Agent Result + Laravel validation;
+- сохранение результата → Event / ManagerAction через доменные сервисы.
 
 ### Phase 5 — Project state
 
@@ -1120,9 +1220,9 @@ MVP считается готовым, когда:
 10. При необходимости создаётся ManagerAction.
 11. Для ответа создаётся draft.
 12. Менеджер может изменить или отклонить результат.
-13. AI не отправляет письмо самостоятельно.
+13. Hermes / AI не отправляет письмо самостоятельно.
 14. Все основные сценарии покрыты automated tests.
-15. Есть журнал обработки, позволяющий понять, почему система приняла конкретное решение.
+15. Есть журнал обработки, позволяющий понять, почему система приняла конкретное решение (в т.ч. шаги Hermes).
 16. Собираются метрики, необходимые для оценки гипотезы.
 
 ------

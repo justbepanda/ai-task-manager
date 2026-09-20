@@ -49,23 +49,30 @@ class ClientCompanyEditScreen extends Screen
 
     public function commandBar(): iterable
     {
-        return [
+        $bar = [
             Link::make('К списку')->icon('bs.arrow-left')->route('platform.client-companies'),
-            Link::make('Добавить контакт')
+        ];
+
+        if ($this->company?->exists) {
+            $bar[] = Link::make('Добавить контакт')
                 ->icon('bs.person-plus')
-                ->route('platform.client-contacts.create', $this->company)
-                ->canSee((bool) $this->company?->exists),
-            Button::make('Сохранить')
-                ->icon('bs.check-circle')
-                ->method('save')
-                ->type(Color::PRIMARY),
-            Button::make('Удалить')
+                ->route('platform.client-contacts.create', $this->company);
+        }
+
+        $bar[] = Button::make('Сохранить')
+            ->icon('bs.check-circle')
+            ->method('save')
+            ->type(Color::PRIMARY);
+
+        if ($this->company?->exists) {
+            $bar[] = Button::make('Удалить')
                 ->icon('bs.trash')
                 ->method('remove')
                 ->type(Color::DANGER)
-                ->canSee((bool) $this->company?->exists)
-                ->confirm('Удалить клиента и все контакты?'),
-        ];
+                ->confirm('Удалить клиента и все контакты?');
+        }
+
+        return $bar;
     }
 
     public function layout(): iterable

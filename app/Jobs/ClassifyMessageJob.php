@@ -2,15 +2,18 @@
 
 namespace App\Jobs;
 
-use App\Domain\Classification\ClassifyAndMatchMessage;
+use App\Enums\MessageProcessingStatus;
+use App\Hermes\ProcessIncomingMessage;
 use App\Models\Message;
 use App\Models\ProcessingLog;
-use App\Enums\MessageProcessingStatus;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
+/**
+ * Entry job for Hermes pipeline: classify/match tools → optional LLM → Laravel apply.
+ */
 class ClassifyMessageJob implements ShouldQueue
 {
     use Queueable;
@@ -21,7 +24,7 @@ class ClassifyMessageJob implements ShouldQueue
         public int $messageId,
     ) {}
 
-    public function handle(ClassifyAndMatchMessage $classifyAndMatch): void
+    public function handle(ProcessIncomingMessage $process): void
     {
         $message = Message::query()->find($this->messageId);
 
@@ -43,11 +46,7 @@ class ClassifyMessageJob implements ShouldQueue
             return;
         }
 
-        $result = $classifyAndMatch->handle($message);
-        $classifyAndMatch->dispatchAnalyzeIfNeeded(
-            $result['message'],
-            $result['dispatch_analyze'],
-        );
+        $process->handle($message);
     }
 
     public function failed(?Throwable $exception): void
@@ -64,7 +63,7 @@ class ClassifyMessageJob implements ShouldQueue
 
         ProcessingLog::query()->create([
             'message_id' => $message->id,
-            'step' => 'classified',
+            'step' => 'hermes_pipeline',
             'status' => 'failed',
             'details' => [
                 'error' => $exception?->getMessage(),

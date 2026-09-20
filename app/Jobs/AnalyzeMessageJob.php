@@ -48,13 +48,22 @@ class AnalyzeMessageJob implements ShouldQueue
 
         if (in_array($message->classification, [
             MessageClassification::Newsletter,
-            MessageClassification::Technical,
             MessageClassification::Personal,
             MessageClassification::Ignored,
         ], true)) {
             Log::info('AnalyzeMessageJob: skip non-content classification', [
                 'message_id' => $this->messageId,
                 'classification' => $message->classification->value,
+            ]);
+
+            return;
+        }
+
+        // Technical: only light Hermes summary when project is known.
+        if ($message->classification === MessageClassification::Technical
+            && $message->project_id === null) {
+            Log::info('AnalyzeMessageJob: skip technical without project', [
+                'message_id' => $this->messageId,
             ]);
 
             return;

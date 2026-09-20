@@ -20,6 +20,9 @@ class FakeAiAnalyzer implements AiAnalyzer
 
     private ?Closure $handler = null;
 
+    /** @var array<string, mixed>|null */
+    private ?array $jsonPayload = null;
+
     /**
      * @param  array<string, mixed>  $payload
      */
@@ -28,6 +31,16 @@ class FakeAiAnalyzer implements AiAnalyzer
         $this->payload = $payload;
         $this->throw = null;
         $this->handler = null;
+
+        return $this;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    public function withJsonPayload(array $payload): self
+    {
+        $this->jsonPayload = $payload;
 
         return $this;
     }
@@ -73,6 +86,29 @@ class FakeAiAnalyzer implements AiAnalyzer
         }
 
         return $this->defaultPayload($context);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function completeJson(string $systemPrompt, string $userPrompt): array
+    {
+        if ($this->throw !== null) {
+            throw $this->throw;
+        }
+
+        if ($this->jsonPayload !== null) {
+            return $this->jsonPayload;
+        }
+
+        if ($this->payload !== null) {
+            return $this->payload;
+        }
+
+        return [
+            'groups' => [],
+            'unmatched_message_ids' => [],
+        ];
     }
 
     /**

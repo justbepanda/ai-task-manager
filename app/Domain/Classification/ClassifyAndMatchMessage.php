@@ -4,6 +4,7 @@ namespace App\Domain\Classification;
 
 use App\Domain\Classification\DTO\ClassificationResult;
 use App\Domain\Metrics\HypothesisMetricsRecorder;
+use App\Domain\Projects\AutoCreateProjectFromIncomingMail;
 use App\Domain\Projects\DTO\MatchResult;
 use App\Domain\Projects\ProjectMatcher;
 use App\Enums\MessageClassification;
@@ -18,6 +19,7 @@ class ClassifyAndMatchMessage
     public function __construct(
         private readonly MessageClassifier $classifier,
         private readonly ProjectMatcher $matcher,
+        private readonly AutoCreateProjectFromIncomingMail $autoCreateProject,
         private readonly HypothesisMetricsRecorder $metrics,
     ) {}
 
@@ -42,7 +44,32 @@ class ClassifyAndMatchMessage
             $projectId = $classification->classification === MessageClassification::Ignored
                 ? null
                 : $match->projectId;
-            $status = $this->resolveProcessingStatus($classification, $match);
+
+            $autoCreated = false;
+            if ($projectId === null && $classification->classification !== MessageClassification::Ignored) {
+                $auto = $this->autoCreateProject->tryCreate(
+                    $message,
+                    $classification->classification,
+                    $match->projectId,
+                    $match->ambiguous,
+                );
+
+                if ($auto !== null) {
+                    $projectId = (int) $auto['project']->id;
+                    $autoCreated = $auto['created'];
+                    $reason = $autoCreated
+                        ? 'auto_create_project:'.$auto['project']->name
+                        : 'auto_attach_project:'.$auto['project']->name;
+                    $match = new MatchResult(
+                        projectId: $projectId,
+                        ambiguous: false,
+                        candidates: $match->candidates,
+                        reasons: array_values(array_merge($match->reasons, [$reason])),
+                    );
+                }
+            }
+
+            $status = $this->resolveProcessingStatus($classification, $match, $projectId);
 
             $metadata = is_array($message->metadata) ? $message->metadata : [];
             $metadata['classification_confidence'] = $classification->confidence;
@@ -51,6 +78,7 @@ class ClassifyAndMatchMessage
                 'project_id' => $projectId,
                 'ambiguous' => $match->ambiguous,
                 'reasons' => $match->reasons,
+                'auto_created' => $autoCreated,
                 'candidates' => array_map(
                     static fn ($c) => [
                         'project_id' => $c->projectId,
@@ -93,6 +121,7 @@ class ClassifyAndMatchMessage
                     'project_id' => $projectId,
                     'ambiguous' => $match->ambiguous,
                     'reasons' => $match->reasons,
+                    'auto_created' => $autoCreated,
                     'candidates' => array_map(
                         static fn ($c) => [
                             'project_id' => $c->projectId,
@@ -119,6 +148,7 @@ class ClassifyAndMatchMessage
             } elseif ($projectId !== null) {
                 $this->metrics->record('project_auto_matched', [
                     'project_id' => $projectId,
+                    'auto_created' => $autoCreated,
                 ], $message, projectId: $projectId);
             } else {
                 $this->metrics->record('project_unmatched', [
@@ -126,19 +156,24 @@ class ClassifyAndMatchMessage
                 ], $message);
             }
 
-            $dispatchAnalyze = $this->shouldDispatchAnalyze($classification, $projectId);
+            $needsLlm = $this->needsLlm($classification, $projectId, $match);
 
             return [
                 'message' => $message->fresh(['conversation', 'processingLogs']),
                 'classification' => $classification,
                 'match' => $match,
-                'dispatch_analyze' => $dispatchAnalyze,
+                'needs_llm' => $needsLlm,
+                /** @deprecated use needs_llm */
+                'dispatch_analyze' => $needsLlm,
             ];
         });
     }
 
-    private function resolveProcessingStatus(ClassificationResult $classification, MatchResult $match): MessageProcessingStatus
-    {
+    private function resolveProcessingStatus(
+        ClassificationResult $classification,
+        MatchResult $match,
+        ?int $projectId,
+    ): MessageProcessingStatus {
         $type = $classification->classification;
 
         if ($type === MessageClassification::Unknown) {
@@ -146,7 +181,7 @@ class ClassifyAndMatchMessage
         }
 
         if ($type === MessageClassification::Client) {
-            if ($match->ambiguous || $match->projectId === null) {
+            if ($match->ambiguous || $projectId === null) {
                 return MessageProcessingStatus::NeedsManual;
             }
 
@@ -162,18 +197,25 @@ class ClassifyAndMatchMessage
         return MessageProcessingStatus::Classified;
     }
 
-    private function shouldDispatchAnalyze(ClassificationResult $classification, ?int $projectId): bool
+    private function needsLlm(ClassificationResult $classification, ?int $projectId, MatchResult $match): bool
     {
+        $hasCandidates = $match->candidates !== [];
+
         return match ($classification->classification) {
-            MessageClassification::Client => $projectId !== null,
-            MessageClassification::Unknown => $projectId !== null,
-            MessageClassification::Technical,
+            // Full analysis when project known, or pick among candidates when ambiguous/unmatched.
+            MessageClassification::Client,
+            MessageClassification::Unknown => $projectId !== null || $hasCandidates,
+            // Light summary for project technical mail (e.g. Redmine).
+            MessageClassification::Technical => $projectId !== null,
             MessageClassification::Newsletter,
             MessageClassification::Personal,
             MessageClassification::Ignored => false,
         };
     }
 
+    /**
+     * @deprecated Prefer {@see \App\Hermes\ProcessIncomingMessage}
+     */
     public function dispatchAnalyzeIfNeeded(Message $message, bool $shouldDispatch): void
     {
         if ($shouldDispatch) {

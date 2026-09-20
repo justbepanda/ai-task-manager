@@ -12,6 +12,9 @@ readonly class MessageContext
      * @param  list<int>  $candidateProjectIds
      * @param  list<array{id: int, name: string}>  $candidateProjects
      * @param  array<string, mixed>|null  $matchingHints
+     * @param  list<array{field: string, ai_value: string|null, manager_value: string|null}>  $analysisCorrections
+     * @param  list<array{field: string, ai_value: string|null, manager_value: string|null}>  $recentProjectCorrections
+     * @param  string  $analysisMode  full|technical_summary
      */
     public function __construct(
         public array $message,
@@ -22,6 +25,9 @@ readonly class MessageContext
         public array $candidateProjectIds = [],
         public array $candidateProjects = [],
         public ?array $matchingHints = null,
+        public array $analysisCorrections = [],
+        public array $recentProjectCorrections = [],
+        public string $analysisMode = 'full',
     ) {}
 
     /**
@@ -30,6 +36,7 @@ readonly class MessageContext
     public function toPromptArray(): array
     {
         $payload = [
+            'analysis_mode' => $this->analysisMode,
             'message' => $this->message,
             'conversation_messages' => $this->conversationMessages,
             'project' => $this->project,
@@ -37,6 +44,8 @@ readonly class MessageContext
             'recent_events' => $this->recentEvents,
             'candidate_project_ids' => $this->candidateProjectIds,
             'candidate_projects' => $this->candidateProjects,
+            'analysis_corrections' => $this->analysisCorrections,
+            'recent_project_corrections' => $this->recentProjectCorrections,
         ];
 
         if ($this->matchingHints !== null) {

@@ -2,15 +2,11 @@
 
 namespace App\AI\Contracts;
 
-use App\AI\DTO\MessageContext;
+use App\Hermes\Contracts\LlmProvider;
 
-interface AiAnalyzer
+/**
+ * @deprecated Prefer {@see LlmProvider} via Hermes. Kept as alias for existing bindings/tests.
+ */
+interface AiAnalyzer extends LlmProvider
 {
-    /**
-     * Return structured analysis fields as an associative array (AGENTS §8).
-     * AnalyzeMessage validates the payload into AnalysisResult.
-     *
-     * @return array<string, mixed>
-     */
-    public function analyze(MessageContext $context): array;
 }

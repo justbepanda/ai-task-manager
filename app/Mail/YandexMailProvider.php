@@ -19,12 +19,63 @@ class YandexMailProvider implements MailProvider
     ) {}
 
     /**
+     * @return list<string>
+     */
+    public function listSyncFolders(): array
+    {
+        $config = $this->validatedConfig();
+
+        if (! $config['sync_all_folders']) {
+            return [$config['folder']];
+        }
+
+        $mailbox = new ImapMailbox($config);
+
+        try {
+            $mailbox->open($config['folder']);
+            $folders = $mailbox->listFolderNames();
+        } catch (Throwable $e) {
+            throw new MailProviderException(
+                'IMAP list folders failed: '.$this->sanitizeMessage($e->getMessage(), $config),
+                0,
+                $e instanceof \Exception ? $e : null,
+            );
+        } finally {
+            $mailbox->close();
+        }
+
+        $filtered = $this->filterExcludedFolders($folders, $config['folder_exclude']);
+
+        if ($filtered === []) {
+            return [$config['folder']];
+        }
+
+        // Keep INBOX first for predictable first-run behaviour.
+        usort($filtered, static function (string $a, string $b): int {
+            if (strcasecmp($a, 'INBOX') === 0) {
+                return -1;
+            }
+            if (strcasecmp($b, 'INBOX') === 0) {
+                return 1;
+            }
+
+            return strcasecmp($a, $b);
+        });
+
+        return $filtered;
+    }
+
+    /**
      * @return iterable<int, NormalizedIncomingMessage>
      */
     public function fetchNewMessages(?MailSyncState $state = null): iterable
     {
         $config = $this->validatedConfig();
-        $folder = (string) $config['folder'];
+        $folder = trim((string) ($state?->folder ?: $config['folder']));
+        if ($folder === '') {
+            $folder = 'INBOX';
+        }
+
         $firstSyncLimit = (int) ($config['first_sync_limit'] ?? 100);
         $mailbox = new ImapMailbox($config);
 
@@ -44,7 +95,7 @@ class YandexMailProvider implements MailProvider
                 $lastUid = 0;
             }
 
-            $uids = $this->resolveUids($mailbox, $lastUid, $firstSyncLimit);
+            $uids = $this->resolveUids($mailbox, $lastUid, $firstSyncLimit, $folder);
 
             foreach ($uids as $uid) {
                 yield $this->fetchOne($mailbox, $folder, $uid, $uidvalidity);
@@ -65,13 +116,13 @@ class YandexMailProvider implements MailProvider
     /**
      * @return list<int>
      */
-    private function resolveUids(ImapMailbox $mailbox, int $lastUid, int $firstSyncLimit): array
+    private function resolveUids(ImapMailbox $mailbox, int $lastUid, int $firstSyncLimit, string $folder): array
     {
         if ($lastUid > 0) {
             return $mailbox->searchUids('UID '.($lastUid + 1).':*');
         }
 
-        // First-run policy: import only the newest N messages, never the whole mailbox.
+        // First-run policy: import only the newest N messages per folder.
         $allUids = $mailbox->searchUids('ALL');
 
         if ($allUids === []) {
@@ -85,6 +136,7 @@ class YandexMailProvider implements MailProvider
 
         Log::info('First IMAP sync limited to newest messages', [
             'provider' => MailSource::Yandex->value,
+            'folder' => $folder,
             'limit' => $firstSyncLimit,
             'selected' => count($limited),
         ]);
@@ -115,6 +167,44 @@ class YandexMailProvider implements MailProvider
     }
 
     /**
+     * @param  list<string>  $folders
+     * @param  list<string>  $excludeNeedles
+     * @return list<string>
+     */
+    private function filterExcludedFolders(array $folders, array $excludeNeedles): array
+    {
+        if ($excludeNeedles === []) {
+            return $folders;
+        }
+
+        $kept = [];
+        foreach ($folders as $folder) {
+            $haystack = mb_strtolower($folder);
+            $decoded = function_exists('imap_utf7_decode')
+                ? mb_strtolower((string) @imap_utf7_decode($folder))
+                : $haystack;
+
+            $excluded = false;
+            foreach ($excludeNeedles as $needle) {
+                $needle = mb_strtolower(trim($needle));
+                if ($needle === '') {
+                    continue;
+                }
+                if (str_contains($haystack, $needle) || str_contains($decoded, $needle)) {
+                    $excluded = true;
+                    break;
+                }
+            }
+
+            if (! $excluded) {
+                $kept[] = $folder;
+            }
+        }
+
+        return array_values($kept);
+    }
+
+    /**
      * @return array{
      *     host: string,
      *     port: int,
@@ -122,7 +212,9 @@ class YandexMailProvider implements MailProvider
      *     username: string,
      *     password: string,
      *     folder: string,
-     *     first_sync_limit: int
+     *     first_sync_limit: int,
+     *     sync_all_folders: bool,
+     *     folder_exclude: list<string>
      * }
      */
     private function validatedConfig(): array
@@ -138,6 +230,11 @@ class YandexMailProvider implements MailProvider
             );
         }
 
+        $exclude = $config['folder_exclude'] ?? [];
+        if (! is_array($exclude)) {
+            $exclude = [];
+        }
+
         return [
             'host' => (string) ($config['host'] ?? 'imap.yandex.ru'),
             'port' => (int) ($config['port'] ?? 993),
@@ -146,6 +243,11 @@ class YandexMailProvider implements MailProvider
             'password' => $password,
             'folder' => (string) ($config['folder'] ?? 'INBOX'),
             'first_sync_limit' => (int) ($config['first_sync_limit'] ?? 100),
+            'sync_all_folders' => (bool) ($config['sync_all_folders'] ?? true),
+            'folder_exclude' => array_values(array_filter(array_map(
+                static fn (mixed $item): string => trim((string) $item),
+                $exclude,
+            ), static fn (string $item): bool => $item !== '')),
         ];
     }
 

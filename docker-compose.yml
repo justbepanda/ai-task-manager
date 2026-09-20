@@ -52,7 +52,7 @@ services:
   queue:
     <<: *php-common
     container_name: ${APP_NAME}-queue
-    command: php artisan queue:work redis --sleep=1 --tries=3 --timeout=120
+    command: php artisan queue:work redis --sleep=1 --tries=3 --timeout=180 --max-jobs=50 --max-time=3600
     depends_on:
       - php
       - redis

@@ -73,10 +73,11 @@ class SensitiveDataSanitizer
         $parts = [];
 
         foreach ($clean as $key => $value) {
+            $label = AdminLabels::detailKey((string) $key);
             if (is_scalar($value) || $value === null) {
-                $parts[] = $key.'='.(string) ($value ?? 'null');
+                $parts[] = $label.'='.(string) ($value ?? 'null');
             } elseif (is_array($value)) {
-                $parts[] = $key.'=['.count($value).']';
+                $parts[] = $label.'=['.count($value).']';
             }
             if (count($parts) >= 6) {
                 break;

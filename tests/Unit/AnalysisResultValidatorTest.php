@@ -59,6 +59,16 @@ class AnalysisResultValidatorTest extends TestCase
     }
 
     #[Test]
+    public function aliases_common_llm_event_types(): void
+    {
+        $result = $this->validator->validate($this->basePayload([
+            'event_type' => 'client_response',
+        ]), $this->context(projectId: 1, candidates: [1]));
+
+        $this->assertSame(EventType::ClientQuestion, $result->eventType);
+    }
+
+    #[Test]
     public function missing_project_id_is_allowed(): void
     {
         $result = $this->validator->validate($this->basePayload([

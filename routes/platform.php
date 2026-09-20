@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use App\Orchid\Screens\Activity\ActivityLogListScreen;
+use App\Orchid\Screens\Ops\AdminToolsScreen;
 use App\Orchid\Screens\Client\ClientCompanyEditScreen;
 use App\Orchid\Screens\Client\ClientCompanyListScreen;
 use App\Orchid\Screens\Client\ClientContactEditScreen;
@@ -9,9 +11,11 @@ use App\Orchid\Screens\DashboardScreen;
 use App\Orchid\Screens\Executor\ExecutorEditScreen;
 use App\Orchid\Screens\Executor\ExecutorListScreen;
 use App\Orchid\Screens\MailFilter\MailFilterSettingEditScreen;
+use App\Orchid\Screens\Settings\AppSettingEditScreen;
 use App\Orchid\Screens\ManagerAction\ManagerActionListScreen;
 use App\Orchid\Screens\ManagerAction\ManagerActionViewScreen;
 use App\Orchid\Screens\Message\MessageListScreen;
+use App\Orchid\Screens\Message\MessageProjectAssignLlmScreen;
 use App\Orchid\Screens\Message\MessageProjectAssignScreen;
 use App\Orchid\Screens\Message\MessageViewScreen;
 use App\Orchid\Screens\Metrics\HypothesisMetricsScreen;
@@ -34,6 +38,18 @@ Route::screen('metrics/hypothesis', HypothesisMetricsScreen::class)
     ->breadcrumbs(fn (Trail $trail) => $trail
         ->parent('platform.index')
         ->push('Метрики гипотезы', route('platform.metrics.hypothesis')));
+
+Route::screen('activity-logs', ActivityLogListScreen::class)
+    ->name('platform.activity-logs')
+    ->breadcrumbs(fn (Trail $trail) => $trail
+        ->parent('platform.index')
+        ->push('Журнал', route('platform.activity-logs')));
+
+Route::screen('admin-tools', AdminToolsScreen::class)
+    ->name('platform.admin-tools')
+    ->breadcrumbs(fn (Trail $trail) => $trail
+        ->parent('platform.index')
+        ->push('Сервисные команды', route('platform.admin-tools')));
 
 Route::screen('profile', UserProfileScreen::class)
     ->name('platform.profile')
@@ -160,6 +176,18 @@ Route::screen('messages/assign', MessageProjectAssignScreen::class)
     ->breadcrumbs(fn (Trail $trail) => $trail
         ->parent('platform.messages')
         ->push('Распределение', route('platform.messages.assign')));
+
+Route::screen('messages/assign-llm', MessageProjectAssignLlmScreen::class)
+    ->name('platform.messages.assign-llm')
+    ->breadcrumbs(fn (Trail $trail) => $trail
+        ->parent('platform.messages')
+        ->push('Распределение (LLM)', route('platform.messages.assign-llm')));
+
+Route::screen('settings', AppSettingEditScreen::class)
+    ->name('platform.settings')
+    ->breadcrumbs(fn (Trail $trail) => $trail
+        ->parent('platform.index')
+        ->push('Настройки', route('platform.settings')));
 
 Route::screen('mail-filters', MailFilterSettingEditScreen::class)
     ->name('platform.mail-filters')

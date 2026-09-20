@@ -4,11 +4,12 @@ declare(strict_types=1);
 
 namespace App\Orchid\Screens\Message;
 
-use App\Domain\Classification\ClassifyAndMatchMessage;
 use App\Domain\Mail\MailFilterSettingService;
 use App\Domain\Messages\MessageManualOverrideService;
+use App\Domain\Messages\ReanalyzeMessage;
 use App\Domain\Messages\ResolveMessageSenderPerson;
 use App\Enums\MessageClassification;
+use App\Hermes\ProcessIncomingMessage;
 use App\Jobs\AnalyzeMessageJob;
 use App\Models\AnalysisCorrection;
 use App\Models\Message;
@@ -16,6 +17,7 @@ use App\Models\ProcessingLog;
 use App\Models\Project;
 use App\Support\AdminLabels;
 use App\Support\EmailAddress;
+use App\Support\EmailLatestReplyExtractor;
 use App\Support\SensitiveDataSanitizer;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -73,6 +75,11 @@ class MessageViewScreen extends Screen
                 ->method('addToBlacklist')
                 ->type(Color::WARNING)
                 ->confirm('Добавить email отправителя в чёрный список и переклассифицировать письмо как «Игнорируемое»?'),
+            Button::make('Переанализировать')
+                ->icon('bs.stars')
+                ->method('reanalyze')
+                ->type(Color::SECONDARY)
+                ->confirm('Удалить текущее событие/действие менеджера и заново запустить Hermes по этому письму?'),
             Button::make('Сохранить правки')
                 ->icon('bs.check-circle')
                 ->method('saveOverride')
@@ -100,6 +107,51 @@ class MessageViewScreen extends Screen
                 Sight::make('ai_confidence', 'Уверенность')->render(fn (Message $m) => $m->ai_confidence !== null ? e((string) $m->ai_confidence) : '—'),
                 Sight::make('requires_manager', 'Требуется менеджер')->render(fn (Message $m) => $m->requires_manager === null ? '—' : ($m->requires_manager ? 'да' : 'нет')),
                 Sight::make('event_type', 'Тип события')->render(fn (Message $m) => e($m->events->first()?->type->label() ?? '—')),
+                Sight::make('project_candidates', 'Кандидаты проектов')->render(function (Message $m) {
+                    $match = is_array($m->metadata) ? ($m->metadata['project_match'] ?? null) : null;
+                    if (! is_array($match)) {
+                        return '—';
+                    }
+
+                    $ambiguous = ! empty($match['ambiguous']) ? ' (неоднозначно)' : '';
+                    $candidates = is_array($match['candidates'] ?? null) ? $match['candidates'] : [];
+                    if ($candidates === []) {
+                        $reasons = is_array($match['reasons'] ?? null) ? implode(', ', $match['reasons']) : '';
+
+                        return e('нет кандидатов'.$ambiguous.($reasons !== '' ? ' — '.$reasons : ''));
+                    }
+
+                    $projectIds = [];
+                    foreach ($candidates as $c) {
+                        if (is_array($c) && isset($c['project_id'])) {
+                            $projectIds[] = (int) $c['project_id'];
+                        }
+                    }
+                    $names = Project::query()
+                        ->whereIn('id', $projectIds)
+                        ->pluck('name', 'id');
+
+                    $lines = [];
+                    foreach ($candidates as $c) {
+                        if (! is_array($c) || ! isset($c['project_id'])) {
+                            continue;
+                        }
+                        $id = (int) $c['project_id'];
+                        $score = isset($c['score']) ? number_format((float) $c['score'], 2) : '?';
+                        $reasons = is_array($c['reasons'] ?? null) ? implode(', ', $c['reasons']) : '';
+                        $name = $names[$id] ?? ('#'.$id);
+                        $lines[] = sprintf('%s — score %s%s', $name, $score, $reasons !== '' ? ' ('.$reasons.')' : '');
+                    }
+
+                    return e(implode('; ', $lines).$ambiguous);
+                }),
+                Sight::make('ai_latest_body', 'Для AI (последний ответ)')->render(function (Message $m) {
+                    $latest = app(EmailLatestReplyExtractor::class)->latest((string) ($m->body ?? ''), 2000);
+
+                    return view('orchid.fields.plain-text', [
+                        'text' => $latest !== '' ? $latest : '—',
+                    ]);
+                }),
                 Sight::make('body', 'Текст письма')->render(fn (Message $m) => view('orchid.fields.plain-text', [
                     'text' => (string) ($m->body ?? ''),
                 ])),
@@ -173,10 +225,16 @@ class MessageViewScreen extends Screen
         Toast::info('Корректировки сохранены.');
     }
 
+    public function reanalyze(Message $message, ReanalyzeMessage $reanalyze): void
+    {
+        $reanalyze->handle($message, sync: false);
+        Toast::info('Переанализ поставлен в очередь. Обновите страницу через минуту.');
+    }
+
     public function addToBlacklist(
         Message $message,
         MailFilterSettingService $filters,
-        ClassifyAndMatchMessage $classifyAndMatch,
+        ProcessIncomingMessage $process,
     ): void {
         $email = EmailAddress::extract($message->sender);
         if ($email === null) {
@@ -187,11 +245,7 @@ class MessageViewScreen extends Screen
 
         $filters->addBlockedEmail($email);
 
-        $result = $classifyAndMatch->handle($message);
-        $classifyAndMatch->dispatchAnalyzeIfNeeded(
-            $result['message'],
-            $result['dispatch_analyze'],
-        );
+        $process->handle($message->fresh());
 
         Toast::info('Отправитель '.$email.' добавлен в чёрный список. Письмо переклассифицировано.');
     }

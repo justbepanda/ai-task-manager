@@ -40,6 +40,10 @@ class PlatformProvider extends OrchidServiceProvider
                 ->icon('bs.diagram-3')
                 ->route('platform.messages.assign'),
 
+            Menu::make('Распределение (LLM)')
+                ->icon('bs.stars')
+                ->route('platform.messages.assign-llm'),
+
             Menu::make('Фильтры почты')
                 ->icon('bs.funnel')
                 ->route('platform.mail-filters'),
@@ -65,6 +69,19 @@ class PlatformProvider extends OrchidServiceProvider
             Menu::make('Метрики гипотезы')
                 ->icon('bs.bar-chart')
                 ->route('platform.metrics.hypothesis'),
+
+            Menu::make('Журнал')
+                ->icon('bs.journal-text')
+                ->route('platform.activity-logs'),
+
+            Menu::make('Сервисные команды')
+                ->icon('bs.terminal')
+                ->route('platform.admin-tools'),
+
+            Menu::make('Настройки')
+                ->icon('bs.gear')
+                ->route('platform.settings')
+                ->title('Система'),
 
             Menu::make('Пользователи')
                 ->icon('bs.people')

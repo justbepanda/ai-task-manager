@@ -11,7 +11,7 @@ class SyncMailCommand extends Command
 {
     protected $signature = 'mail:sync {--sync : Run inline instead of dispatching to the queue}';
 
-    protected $description = 'Sync new messages from the configured mail provider (Yandex IMAP)';
+    protected $description = 'Sync new messages from Yandex IMAP (all folders by default, per-folder cursors)';
 
     public function handle(SyncMailService $syncMailService): int
     {
@@ -19,9 +19,10 @@ class SyncMailCommand extends Command
             $result = $syncMailService->sync(MailSource::Yandex);
 
             $this->info(sprintf(
-                'Mail sync finished: imported=%d skipped=%d last_uid=%d',
+                'Mail sync finished: imported=%d skipped=%d folders=%d last_uid=%d',
                 $result['imported'],
                 $result['skipped'],
+                $result['folders'] ?? 1,
                 $result['last_uid'],
             ));
 

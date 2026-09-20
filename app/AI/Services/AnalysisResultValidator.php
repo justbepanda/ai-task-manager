@@ -81,12 +81,37 @@ class AnalysisResultValidator
             throw new AnalysisValidationException("{$field} is required");
         }
 
+        if ($enumClass === EventType::class) {
+            $value = $this->normalizeEventType($value);
+        }
+
         $enum = $enumClass::tryFrom($value);
         if ($enum === null) {
             throw new AnalysisValidationException("Unknown {$field}: {$value}");
         }
 
         return $enum;
+    }
+
+    private function normalizeEventType(string $value): string
+    {
+        $aliases = [
+            'client_response' => EventType::ClientQuestion->value,
+            'client_message' => EventType::ClientQuestion->value,
+            'client_feedback' => EventType::ClientRequest->value,
+            'client_comment' => EventType::ClientRequest->value,
+            'question' => EventType::ClientQuestion->value,
+            'request' => EventType::ClientRequest->value,
+            'bug' => EventType::ClientReportedBug->value,
+            'bug_report' => EventType::ClientReportedBug->value,
+            'info' => EventType::InformationOnly->value,
+            'information' => EventType::InformationOnly->value,
+            'notification' => EventType::TechnicalNotification->value,
+        ];
+
+        $key = mb_strtolower(trim($value));
+
+        return $aliases[$key] ?? $value;
     }
 
     private function resolveProjectId(mixed $rawProjectId, MessageContext $context): ?int

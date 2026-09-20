@@ -16,12 +16,52 @@ class SyncMailService
     ) {}
 
     /**
-     * @return array{imported: int, skipped: int, last_uid: int}
+     * @return array{imported: int, skipped: int, last_uid: int, folders: int}
      */
     public function sync(MailSource $source = MailSource::Yandex): array
     {
-        $folder = (string) config("mail_providers.{$source->value}.folder", 'INBOX');
+        $folders = $this->provider->listSyncFolders();
+        if ($folders === []) {
+            $folders = [(string) config("mail_providers.{$source->value}.folder", 'INBOX')];
+        }
 
+        $imported = 0;
+        $skipped = 0;
+        $maxUidOverall = 0;
+
+        foreach ($folders as $folder) {
+            $folder = trim((string) $folder);
+            if ($folder === '') {
+                continue;
+            }
+
+            $result = $this->syncFolder($source, $folder);
+            $imported += $result['imported'];
+            $skipped += $result['skipped'];
+            $maxUidOverall = max($maxUidOverall, $result['last_uid']);
+        }
+
+        Log::info('Mail sync completed', [
+            'provider' => $source->value,
+            'folders' => count($folders),
+            'imported' => $imported,
+            'skipped' => $skipped,
+            'last_uid' => $maxUidOverall,
+        ]);
+
+        return [
+            'imported' => $imported,
+            'skipped' => $skipped,
+            'last_uid' => $maxUidOverall,
+            'folders' => count($folders),
+        ];
+    }
+
+    /**
+     * @return array{imported: int, skipped: int, last_uid: int}
+     */
+    private function syncFolder(MailSource $source, string $folder): array
+    {
         $state = MailSyncState::query()->firstOrCreate(
             [
                 'provider' => $source->value,
@@ -65,7 +105,7 @@ class SyncMailService
         ]);
         $state->save();
 
-        Log::info('Mail sync completed', [
+        Log::info('Mail folder sync completed', [
             'provider' => $source->value,
             'folder' => $folder,
             'imported' => $imported,

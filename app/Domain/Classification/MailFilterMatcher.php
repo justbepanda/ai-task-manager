@@ -9,6 +9,8 @@ use App\Support\EmailAddress;
 /**
  * Global blacklist matcher (AGENTS: rules first, not LLM).
  * Returns a short match reason or null when the message should not be ignored.
+ *
+ * Subject/body stop words: plain substring (case-insensitive), or `regex:/.../flags`.
  */
 class MailFilterMatcher
 {
@@ -49,19 +51,39 @@ class MailFilterMatcher
         }
 
         foreach ($this->list($settings->subject_stop_words) as $word) {
-            if ($word !== '' && mb_stripos($subject, $word) !== false) {
+            if ($this->textMatchesRule($subject, $word)) {
                 return 'subject_stop_word:'.$word;
             }
         }
 
         $bodySample = mb_substr($body, 0, self::BODY_SCAN_LIMIT);
         foreach ($this->list($settings->body_stop_words) as $word) {
-            if ($word !== '' && mb_stripos($bodySample, $word) !== false) {
+            if ($this->textMatchesRule($bodySample, $word)) {
                 return 'body_stop_word:'.$word;
             }
         }
 
         return null;
+    }
+
+    private function textMatchesRule(string $haystack, string $rule): bool
+    {
+        if ($rule === '') {
+            return false;
+        }
+
+        if (str_starts_with($rule, 'regex:')) {
+            $pattern = substr($rule, strlen('regex:'));
+            if ($pattern === '') {
+                return false;
+            }
+
+            $result = @preg_match($pattern, $haystack);
+
+            return $result === 1;
+        }
+
+        return mb_stripos($haystack, $rule) !== false;
     }
 
     /**

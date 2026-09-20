@@ -30,7 +30,7 @@ class ProjectEditScreen extends Screen
     public function query(Project $project): iterable
     {
         $this->project = $project;
-        $project->load(['instruction', 'matchingRule', 'clientCompanies', 'clientContacts.clientCompany', 'executors']);
+        $project->load(['instruction', 'matchingRule', 'clientCompanies', 'clientContacts.clientCompany', 'executors', 'managerExecutor']);
 
         $service = app(ProjectService::class);
         $rule = $project->matchingRule;
@@ -96,7 +96,8 @@ class ProjectEditScreen extends Screen
         return [
             Layout::block(ProjectEditLayout::class)
                 ->title('Основные данные и правила')
-                ->description('Инструкция AI и детерминированные правила хранятся отдельно.'),
+                ->description('Инструкция AI и детерминированные правила хранятся отдельно.')
+                ->vertical(),
 
             Layout::table('clientCompanies', [
                 TD::make('name', 'Клиент')
@@ -147,6 +148,7 @@ class ProjectEditScreen extends Screen
             'project.name' => ['required', 'string', 'max:255'],
             'project.description' => ['nullable', 'string'],
             'project.status' => ['required', Rule::enum(ProjectStatus::class)],
+            'project.manager_executor_id' => ['nullable', 'integer', 'exists:executors,id'],
             'project.instruction_body' => ['nullable', 'string'],
             'project.client_emails' => ['nullable', 'string'],
             'project.staff_emails' => ['nullable', 'string'],

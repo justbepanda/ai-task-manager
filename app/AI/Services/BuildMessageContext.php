@@ -5,41 +5,73 @@ namespace App\AI\Services;
 use App\AI\DTO\MessageContext;
 use App\Domain\Projects\RedmineSubjectProjectExtractor;
 use App\Enums\MessageClassification;
+use App\Models\AnalysisCorrection;
 use App\Models\Event;
 use App\Models\Message;
 use App\Models\Project;
+use App\Support\EmailLatestReplyExtractor;
 
 class BuildMessageContext
 {
     public function __construct(
         private readonly RedmineSubjectProjectExtractor $redmineSubjectExtractor,
+        private readonly EmailLatestReplyExtractor $replyExtractor = new EmailLatestReplyExtractor,
     ) {}
 
     public function handle(Message $message): MessageContext
     {
-        $message->loadMissing(['conversation', 'project.instruction']);
+        $message->loadMissing(['conversation', 'project.instruction', 'analysisCorrections']);
 
         $conversationLimit = (int) config('ai.context.conversation_messages_limit', 10);
         $eventsLimit = (int) config('ai.context.recent_events_limit', 10);
+        $correctionsLimit = (int) config('ai.context.corrections_limit', 15);
+        $latestBodyChars = (int) config('ai.context.latest_body_chars', 4000);
+        $quotedExcerptChars = (int) config('ai.context.thread_excerpt_chars', 800);
+        $conversationBodyChars = (int) config('ai.context.conversation_body_chars', 600);
+
+        $currentSplit = $this->replyExtractor->split(
+            (string) ($message->body ?? ''),
+            $latestBodyChars,
+            $quotedExcerptChars,
+        );
 
         $conversationMessages = [];
         if ($message->conversation_id !== null) {
-            $conversationMessages = Message::query()
+            $conversationQuery = Message::query()
                 ->where('conversation_id', $message->conversation_id)
-                ->whereKeyNot($message->id)
+                ->whereKeyNot($message->id);
+
+            // Never include later thread messages — they leak into summary/reason (e.g. #187 into #130).
+            if ($message->received_at !== null) {
+                $conversationQuery->where(function ($q) use ($message): void {
+                    $q->where('received_at', '<', $message->received_at)
+                        ->orWhere(function ($q2) use ($message): void {
+                            $q2->where('received_at', '=', $message->received_at)
+                                ->where('id', '<', $message->id);
+                        });
+                });
+            } else {
+                $conversationQuery->where('id', '<', $message->id);
+            }
+
+            $conversationMessages = $conversationQuery
                 ->orderByDesc('received_at')
                 ->limit($conversationLimit)
                 ->get(['id', 'sender', 'subject', 'body', 'received_at', 'classification'])
                 ->sortBy('received_at')
                 ->values()
-                ->map(static fn (Message $m): array => [
-                    'id' => $m->id,
-                    'sender' => $m->sender,
-                    'subject' => $m->subject,
-                    'body' => $m->body,
-                    'received_at' => $m->received_at?->toIso8601String(),
-                    'classification' => $m->classification?->value,
-                ])
+                ->map(function (Message $m) use ($conversationBodyChars): array {
+                    $latest = $this->replyExtractor->latest((string) ($m->body ?? ''), $conversationBodyChars);
+
+                    return [
+                        'id' => $m->id,
+                        'sender' => $m->sender,
+                        'subject' => $m->subject,
+                        'body' => $latest,
+                        'received_at' => $m->received_at?->toIso8601String(),
+                        'classification' => $m->classification?->value,
+                    ];
+                })
                 ->all();
         }
 
@@ -57,8 +89,24 @@ class BuildMessageContext
 
         $recentEvents = [];
         if ($message->project_id !== null) {
-            $recentEvents = Event::query()
+            $eventsQuery = Event::query()
                 ->where('project_id', $message->project_id)
+                ->where(function ($q) use ($message): void {
+                    $q->whereNull('message_id')
+                        ->orWhere('message_id', '!=', $message->id);
+                });
+
+            // Prefer events from earlier mail only (avoid later-thread leakage).
+            if ($message->received_at !== null) {
+                $eventsQuery->where(function ($q) use ($message): void {
+                    $q->whereDoesntHave('message')
+                        ->orWhereHas('message', function ($mq) use ($message): void {
+                            $mq->where('received_at', '<', $message->received_at);
+                        });
+                });
+            }
+
+            $recentEvents = $eventsQuery
                 ->orderByDesc('id')
                 ->limit($eventsLimit)
                 ->get(['id', 'type', 'summary', 'confidence', 'created_at'])
@@ -75,6 +123,9 @@ class BuildMessageContext
         $candidateProjectIds = $this->resolveCandidateProjectIds($message);
         $candidateProjects = $this->loadCandidateProjects($candidateProjectIds);
         $matchingHints = $this->buildMatchingHints($message);
+        $analysisMode = $message->classification === MessageClassification::Technical
+            ? 'technical_summary'
+            : 'full';
 
         return new MessageContext(
             message: [
@@ -83,7 +134,9 @@ class BuildMessageContext
                 'recipients' => $message->recipients,
                 'cc' => $message->cc,
                 'subject' => $message->subject,
-                'body' => $message->body,
+                // Latest reply only — quoted history is separate to avoid wrong event/reason.
+                'body' => $currentSplit['latest'],
+                'thread_excerpt' => $currentSplit['quoted_excerpt'],
                 'received_at' => $message->received_at?->toIso8601String(),
                 'classification' => $message->classification?->value,
                 'project_id' => $message->project_id,
@@ -95,6 +148,9 @@ class BuildMessageContext
             candidateProjectIds: $candidateProjectIds,
             candidateProjects: $candidateProjects,
             matchingHints: $matchingHints,
+            analysisCorrections: $this->mapCorrections($message->analysisCorrections),
+            recentProjectCorrections: $this->loadRecentProjectCorrections($message, $correctionsLimit),
+            analysisMode: $analysisMode,
         );
     }
 
@@ -121,19 +177,13 @@ class BuildMessageContext
 
         $ids = array_values(array_unique(array_filter($ids, static fn (int $id): bool => $id > 0)));
 
-        if ($ids === [] && $message->classification === MessageClassification::Unknown) {
-            // Do not invent — empty candidates means AI must return null project_id.
+        if ($ids === []) {
             return [];
         }
 
-        // Ensure candidates still exist.
-        if ($ids !== []) {
-            $existing = Project::query()->whereIn('id', $ids)->pluck('id')->map(fn ($id) => (int) $id)->all();
+        $existing = Project::query()->whereIn('id', $ids)->pluck('id')->map(fn ($id) => (int) $id)->all();
 
-            return array_values(array_intersect($ids, $existing));
-        }
-
-        return $ids;
+        return array_values(array_intersect($ids, $existing));
     }
 
     /**
@@ -156,6 +206,48 @@ class BuildMessageContext
             ])
             ->values()
             ->all();
+    }
+
+    /**
+     * @param  \Illuminate\Support\Collection<int, AnalysisCorrection>|iterable<AnalysisCorrection>  $corrections
+     * @return list<array{field: string, ai_value: string|null, manager_value: string|null}>
+     */
+    private function mapCorrections(iterable $corrections): array
+    {
+        $rows = [];
+        foreach ($corrections as $correction) {
+            if (! $correction instanceof AnalysisCorrection) {
+                continue;
+            }
+            $rows[] = [
+                'field' => (string) $correction->field,
+                'ai_value' => $correction->ai_value !== null ? (string) $correction->ai_value : null,
+                'manager_value' => $correction->manager_value !== null ? (string) $correction->manager_value : null,
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @return list<array{field: string, ai_value: string|null, manager_value: string|null}>
+     */
+    private function loadRecentProjectCorrections(Message $message, int $limit): array
+    {
+        if ($message->project_id === null || $limit <= 0) {
+            return [];
+        }
+
+        $corrections = AnalysisCorrection::query()
+            ->whereHas('message', function ($q) use ($message): void {
+                $q->where('project_id', $message->project_id)
+                    ->whereKeyNot($message->id);
+            })
+            ->orderByDesc('id')
+            ->limit($limit)
+            ->get();
+
+        return $this->mapCorrections($corrections);
     }
 
     /**

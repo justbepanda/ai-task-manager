@@ -5,12 +5,17 @@ declare(strict_types=1);
 namespace App\Orchid\Screens\Message;
 
 use App\Enums\MessageClassification;
+use App\Jobs\ApplyMailFiltersJob;
+use App\Jobs\SyncYandexMailJob;
 use App\Models\Message;
 use App\Orchid\Layouts\Message\MessageFiltersLayout;
 use App\Orchid\Layouts\Message\MessageListLayout;
 use Illuminate\Http\Request;
+use Orchid\Screen\Actions\Button;
 use Orchid\Screen\Actions\Link;
 use Orchid\Screen\Screen;
+use Orchid\Support\Color;
+use Orchid\Support\Facades\Toast;
 
 class MessageListScreen extends Screen
 {
@@ -66,13 +71,29 @@ class MessageListScreen extends Screen
     public function commandBar(): iterable
     {
         if ($this->isIgnoredList()) {
-            return [];
+            return [
+                Button::make('Пересобрать игнорируемые')
+                    ->icon('bs.arrow-clockwise')
+                    ->method('rebuildIgnored')
+                    ->confirm('Применить текущие фильтры ко всем письмам? Совпадения станут игнорируемыми, лишние выйдут из списка.')
+                    ->type(Color::PRIMARY),
+                Link::make('Фильтры почты')
+                    ->icon('bs.funnel')
+                    ->route('platform.mail-filters'),
+            ];
         }
 
         return [
+            Button::make('Синхронизировать почту')
+                ->icon('bs.arrow-repeat')
+                ->method('syncMail')
+                ->type(Color::PRIMARY),
             Link::make('Распределить по проектам')
                 ->icon('bs.diagram-3')
                 ->route('platform.messages.assign'),
+            Link::make('Распределить (LLM)')
+                ->icon('bs.stars')
+                ->route('platform.messages.assign-llm'),
         ];
     }
 
@@ -82,6 +103,20 @@ class MessageListScreen extends Screen
             MessageFiltersLayout::class,
             MessageListLayout::class,
         ];
+    }
+
+    public function syncMail(): void
+    {
+        SyncYandexMailJob::dispatch(userId: auth()->id());
+
+        Toast::info('Синхронизация поставлена в очередь. Новые письма появятся после обработки worker’ом.');
+    }
+
+    public function rebuildIgnored(): void
+    {
+        ApplyMailFiltersJob::dispatch(userId: auth()->id());
+
+        Toast::info('Пересборка игнорируемых поставлена в очередь. Смотрите «Журнал» / обновите список после worker’а.');
     }
 
     public function applyFilters(Request $request)

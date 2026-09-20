@@ -8,13 +8,17 @@ use App\Domain\Metrics\HypothesisMetricsReport;
 use App\Enums\ManagerActionStatus;
 use App\Enums\MessageClassification;
 use App\Enums\MessageProcessingStatus;
+use App\Jobs\SyncYandexMailJob;
 use App\Models\ManagerAction;
 use App\Models\Message;
 use App\Models\Project;
+use Orchid\Screen\Actions\Button;
 use Orchid\Screen\Actions\Link;
 use Orchid\Screen\Screen;
 use Orchid\Screen\TD;
+use Orchid\Support\Color;
 use Orchid\Support\Facades\Layout;
+use Orchid\Support\Facades\Toast;
 
 class DashboardScreen extends Screen
 {
@@ -70,11 +74,23 @@ class DashboardScreen extends Screen
     public function commandBar(): iterable
     {
         return [
+            Button::make('Синхронизировать почту')
+                ->icon('bs.arrow-repeat')
+                ->method('syncMail')
+                ->type(Color::PRIMARY),
             Link::make('Входящие')->icon('bs.inbox')->route('platform.messages'),
             Link::make('Игнорируемые')->icon('bs.eye-slash')->route('platform.messages.ignored'),
             Link::make('Действия')->icon('bs.clipboard-check')->route('platform.manager-actions'),
             Link::make('Метрики гипотезы')->icon('bs.bar-chart')->route('platform.metrics.hypothesis'),
+            Link::make('Журнал')->icon('bs.journal-text')->route('platform.activity-logs'),
         ];
+    }
+
+    public function syncMail(): void
+    {
+        SyncYandexMailJob::dispatch(userId: auth()->id());
+
+        Toast::info('Синхронизация поставлена в очередь. Новые письма появятся после обработки worker’ом.');
     }
 
     public function layout(): iterable
