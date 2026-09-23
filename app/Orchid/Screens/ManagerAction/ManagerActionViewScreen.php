@@ -24,7 +24,7 @@ class ManagerActionViewScreen extends Screen
 
     public function query(ManagerAction $manager_action): iterable
     {
-        $manager_action->load(['project', 'event', 'message']);
+        $manager_action->load(['project', 'event', 'message.projectTask']);
 
         $this->action = $manager_action;
 
@@ -86,8 +86,38 @@ class ManagerActionViewScreen extends Screen
     {
         return [
             Layout::legend('action', [
-                Sight::make('project', 'Проект')->render(fn (ManagerAction $a) => e($a->project?->name ?? '—')),
-                Sight::make('event', 'Событие')->render(fn (ManagerAction $a) => e($a->event?->type?->label() ?? '—').': '.e($a->event?->summary ?? '')),
+                Sight::make('project', 'Проект')->render(function (ManagerAction $a) {
+                    if ($a->project === null) {
+                        return '—';
+                    }
+
+                    return Link::make($a->project->name)
+                        ->route('platform.projects.edit', $a->project);
+                }),
+                Sight::make('project_task', 'Задача')->render(function (ManagerAction $a) {
+                    $task = $a->message?->projectTask;
+                    if ($task === null) {
+                        return '—';
+                    }
+
+                    return Link::make($task->displayLabel())
+                        ->route('platform.tasks.view', $task);
+                }),
+                Sight::make('event', 'Событие')->render(function (ManagerAction $a) {
+                    $event = $a->event;
+                    if ($event === null) {
+                        return '—';
+                    }
+
+                    $label = ($event->type?->label() ?? '—').': '.($event->summary ?? '');
+                    $messageId = $a->message_id ?? $event->message_id;
+                    if ($messageId === null) {
+                        return e($label);
+                    }
+
+                    return Link::make($label)
+                        ->route('platform.messages.view', $messageId);
+                }),
                 Sight::make('action_type', 'Предлагаемое действие')->render(fn (ManagerAction $a) => e($a->action_type->label())),
                 Sight::make('status', 'Статус')->render(fn (ManagerAction $a) => e($a->status->label())),
                 Sight::make('reason', 'Почему требуется действие'),

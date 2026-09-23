@@ -42,6 +42,7 @@ final class AdminLabels
             'project_auto_created' => 'Проект создан автоматически',
             'project_auto_assigned_llm' => 'Распределение через LLM',
             'redmine_people_applied' => 'Redmine: люди проекта',
+            'llm_people_applied' => 'LLM: менеджер и исполнители',
             'redmine_feedback_requires_manager' => 'Redmine: обратная связь',
             'ai_analyzed' => 'AI-анализ',
             'hermes_pipeline' => 'Hermes: пайплайн',

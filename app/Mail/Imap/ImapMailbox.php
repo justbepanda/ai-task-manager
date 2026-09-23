@@ -170,7 +170,7 @@ class ImapMailbox
 
     private function mailboxString(string $folder): string
     {
-        return $this->mailboxRoot().$folder;
+        return $this->mailboxRoot().ImapMailboxName::quoteForOpen($folder);
     }
 
     private function mailboxRoot(): string

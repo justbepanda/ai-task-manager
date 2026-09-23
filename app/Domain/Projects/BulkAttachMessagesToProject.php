@@ -15,6 +15,7 @@ class BulkAttachMessagesToProject
     public function __construct(
         private readonly MessageManualOverrideService $overrides,
         private readonly ProjectService $projects,
+        private readonly MergeProjects $mergeProjects,
     ) {}
 
     /**
@@ -92,6 +93,16 @@ class BulkAttachMessagesToProject
             if ($keyword !== '' && ! in_array($keyword, $normalizedKeywords, true)) {
                 $normalizedKeywords[] = $keyword;
             }
+        }
+
+        $existing = $this->mergeProjects->findByFoldedNames(array_merge([$name], $normalizedKeywords));
+        if ($existing !== null) {
+            $attached = $this->attach((int) $existing->id, $messageIds);
+
+            return [
+                'project' => $existing,
+                'attached' => $attached,
+            ];
         }
 
         $project = $this->projects->create([

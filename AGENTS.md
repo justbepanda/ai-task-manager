@@ -255,9 +255,15 @@ Redmine уведомления с определённого проекта та
 
 ```text
 Project
+  └── ProjectTask (задача: Redmine #id / Jira KEY / email thread)
+        └── Message
   └── Conversation
         └── Message
 ```
+
+`ProjectTask` — единица работы внутри проекта. Redmine/Jira: один тикет = одна задача (много уведомлений). Клиентская почта без тикета: один `Conversation` ≈ одна задача (`source=email_thread`).
+
+Дополнительно: `agent_state` (JSON) — сжатая память диалога для Hermes (`topic`, `status`, `open_questions`, `commitments`, `waiting_for`, `last_summary`, …). Пишет Laravel после валидации Hermes (`UpdateConversationAgentMemory`), не сам LLM напрямую.
 
 ------
 
@@ -281,7 +287,8 @@ Project
 - headers / metadata
 - classification
 - processing status
-
+- ai_summary / ai_confidence
+- agent_facts (JSON) — факты письма для агента (topic, open_questions, key_points, waiting_for, …)
 `external_id` должен позволять безопасно повторно синхронизировать Яндекс.Почту без создания дубликатов.
 
 При необходимости хранить исходные технические данные письма отдельно.
@@ -411,12 +418,14 @@ Hermes должен получать только необходимый кон�
 
 В контекст могут входить:
 
-- письмо;
-- предыдущие сообщения текущего диалога;
+- письмо (latest reply без длинных цитат + опционально thread_excerpt);
+- `conversation_agent_state` — сжатая память диалога;
+- предыдущие сообщения текущего диалога (предпочтительно `ai_summary` / `agent_facts`, не полные тела);
 - информация о проекте;
 - инструкции проекта;
-- последние релевантные события проекта;
-- кандидаты проектов (после детерминированного отбора).
+- последние релевантные события проекта (только по более ранним письмам);
+- кандидаты проектов (после детерминированного отбора);
+- analysis_corrections.
 
 Не передавать весь почтовый ящик целиком.
 
@@ -434,10 +443,18 @@ Hermes должен возвращать строго структурирова
   "requires_manager": true,
   "suggested_action": "reply",
   "draft_reply": "Добрый день! Проверяем проблему...",
-  "reason": "Клиент ожидает информацию о сроках"
+  "reason": "Клиент ожидает информацию о сроках",
+  "agent_facts": {
+    "topic": "Сроки бага",
+    "open_questions": ["Когда будет фикс?"],
+    "commitments": [],
+    "waiting_for": "ответ менеджера",
+    "key_points": ["Клиент ждёт ETA"]
+  }
 }
 ```
 
+`agent_facts` опционален: Laravel всё равно сохранит память из summary/reason через `UpdateConversationAgentMemory`.
 Ответ Hermes обязательно валидировать в Laravel.
 
 Если возвращается некорректный JSON или неизвестное значение enum — считать анализ неуспешным и сохранять ошибку обработки.
@@ -561,8 +578,19 @@ CRUD проектов в Orchid.
 - инструкции;
 - правила сопоставления писем (textarea, один пункт на строку → массивы через `ProjectService`);
 - список связанных сообщений;
+- список задач (`ProjectTask`);
 - список событий;
 - связанные клиенты / контакты / исполнители (read-only на карточке проекта).
+
+------
+
+## Задачи
+
+Список `ProjectTask` (`platform.tasks`, `/admin/tasks`), пункт меню «Задачи» рядом с «Проекты».
+
+Фильтры: проект, источник (Redmine/Jira/переписка), статус.
+Карточка задачи (`platform.tasks.view`): ключ, проект, статус, связанные письма.
+С карточки проекта — таблица задач; из списка — ссылки на письма (`filter[project_task_id]`).
 
 ------
 
@@ -613,7 +641,7 @@ Hermes LLM вызывается для:
 Ежедневно (scheduler) `DetectClientFollowUpsJob` создаёт `ManagerAction` типа `follow_up`, если последнее письмо в диалоге — клиентское и старше `ai.follow_up.silence_days` (по умолчанию 3). CLI: `messages:detect-follow-ups`.
 
 Экран **«Сервисные команды»** (`platform.admin-tools`, `/admin/admin-tools`):
-кнопки для artisan (`mail:sync`, `messages:reprocess`, `--apply-mail-filters`, `messages:detect-follow-ups`, `messages:repair-bodies`, метрики) с описанием «что / когда»; результат в UI и в Журнале.
+кнопки для artisan (`mail:sync`, `messages:reprocess`, `--apply-mail-filters`, `messages:detect-follow-ups`, `projects:apply-people`, `projects:merge-duplicates`, `messages:repair-bodies`, `messages:purge-empty`, метрики) с описанием «что / когда»; результат в UI и в Журнале.
 
 ------
 
@@ -642,7 +670,7 @@ Singleton `app_settings` (`AppSetting` / `AppSettingService`), экран Orchid
 1. `ProjectMatcher` (правила);
 2. `AutoCreateProjectFromIncomingMail` (Redmine, без LLM);
 3. если проект всё ещё `null` — `AutoAssignProjectViaLlm` (привязка к существующему или создание по `proposed_name`, только если `confidence` ≥ порога);
-4. `ApplyRedminePeopleToProject`: из тела `Автор:` → менеджер проекта (`projects.manager_executor_id` + executor), `Назначена:`/`Назначен:` → исполнитель проекта;
+4. `ApplyRedminePeopleToProject`: из тела `Автор:` → менеджер проекта (`projects.manager_executor_id` + executor), `Назначена:`/`Назначен:` → исполнитель проекта; при пробелах — `ApplyPeopleToProjectViaLlm` (менеджер/исполнители по содержанию письма, без перезаписи уже заданного менеджера);
 5. если есть проект (или кандидаты для client/unknown) — Hermes-анализ: summary / event / requires_manager / confidence;
 6. тема с `(Обратная связь)` → `requires_manager=true` (+ ManagerAction, если Event ещё нет).
 
@@ -674,7 +702,7 @@ Draft ответа
 Отклонить
 ```
 
-Доменная логика — в сервисах (`ProjectService`, `ClientCompanyService`, `ClientContactService`, `ExecutorService`, `MessageManualOverrideService`, `ManagerActionService`, `MailFilterSettingService`, `AppSettingService`, `AutoCreateProjectFromIncomingMail`, `AutoAssignProjectViaLlm`, `SuggestUnassignedMessageAssignments`, `SuggestUnassignedMessageAssignmentsWithLlm`, `BulkAttachMessagesToProject`), не в Orchid screens.
+Доменная логика — в сервисах (`ProjectService`, `ClientCompanyService`, `ClientContactService`, `ExecutorService`, `MessageManualOverrideService`, `ManagerActionService`, `MailFilterSettingService`, `AppSettingService`, `AutoCreateProjectFromIncomingMail`, `AutoAssignProjectViaLlm`, `SuggestUnassignedMessageAssignments`, `SuggestUnassignedMessageAssignmentsWithLlm`, `BulkAttachMessagesToProject`, `UpdateConversationAgentMemory`), не в Orchid screens.
 
 ------
 

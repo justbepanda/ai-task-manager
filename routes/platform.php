@@ -23,6 +23,8 @@ use App\Orchid\Screens\Project\ProjectEditScreen;
 use App\Orchid\Screens\Project\ProjectListScreen;
 use App\Orchid\Screens\Role\RoleEditScreen;
 use App\Orchid\Screens\Role\RoleListScreen;
+use App\Orchid\Screens\Task\ProjectTaskListScreen;
+use App\Orchid\Screens\Task\ProjectTaskViewScreen;
 use App\Orchid\Screens\User\UserEditScreen;
 use App\Orchid\Screens\User\UserListScreen;
 use App\Orchid\Screens\User\UserProfileScreen;
@@ -111,6 +113,20 @@ Route::screen('projects', ProjectListScreen::class)
     ->breadcrumbs(fn (Trail $trail) => $trail
         ->parent('platform.index')
         ->push('Проекты', route('platform.projects')));
+
+// Tasks (ProjectTask)
+Route::screen('tasks/{task}', ProjectTaskViewScreen::class)
+    ->name('platform.tasks.view')
+    ->whereNumber('task')
+    ->breadcrumbs(fn (Trail $trail, $task) => $trail
+        ->parent('platform.tasks')
+        ->push($task->displayLabel(), route('platform.tasks.view', $task)));
+
+Route::screen('tasks', ProjectTaskListScreen::class)
+    ->name('platform.tasks')
+    ->breadcrumbs(fn (Trail $trail) => $trail
+        ->parent('platform.index')
+        ->push('Задачи', route('platform.tasks')));
 
 // Clients (Клиенты) / Contacts (Контакты)
 Route::screen('client-companies/create', ClientCompanyEditScreen::class)

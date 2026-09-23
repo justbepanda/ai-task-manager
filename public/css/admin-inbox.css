@@ -1,0 +1,12 @@
+/* Inbox meta pills: keep project/task links without underline (Orchid/Bootstrap override). */
+.inbox-meta-link,
+.inbox-meta-link:hover,
+.inbox-meta-link:focus,
+.inbox-meta-link:active,
+.inbox-meta-link:visited {
+    color: inherit !important;
+    text-decoration: none !important;
+    border-bottom: 0 !important;
+    box-shadow: none !important;
+    background-image: none !important;
+}

@@ -1,0 +1,270 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Domain\Projects;
+
+use App\Domain\Executors\EnsureExecutorManagerRole;
+use App\Domain\Executors\FindOrCreateExecutorFromDisplayName;
+use App\Enums\MessageClassification;
+use App\Hermes\Contracts\LlmProvider;
+use App\Models\Executor;
+use App\Models\Message;
+use App\Models\ProcessingLog;
+use App\Models\Project;
+use Illuminate\Support\Facades\Log;
+
+/**
+ * LLM proposes project manager / executors from mail content.
+ * Deterministic Redmine parsing runs first; this fills gaps and covers client threads.
+ * Never overwrites an existing manager_executor_id.
+ */
+class ApplyPeopleToProjectViaLlm
+{
+    public function __construct(
+        private readonly LlmProvider $llm,
+        private readonly FindOrCreateExecutorFromDisplayName $findOrCreateExecutor,
+        private readonly EnsureExecutorManagerRole $ensureManagerRole,
+    ) {}
+
+    /**
+     * @return array{manager_id: ?int, assignee_ids: list<int>, applied: bool}
+     */
+    public function handle(Message $message, Project $project): array
+    {
+        if ($message->classification === MessageClassification::Ignored
+            || $message->classification === MessageClassification::Newsletter
+            || $message->classification === MessageClassification::Personal) {
+            return ['manager_id' => null, 'assignee_ids' => [], 'applied' => false];
+        }
+
+        $executors = Executor::query()
+            ->where('is_active', true)
+            ->orderBy('last_name')
+            ->orderBy('first_name')
+            ->get(['id', 'last_name', 'first_name', 'middle_name', 'emails', 'position']);
+
+        $bodyChars = (int) config('ai.people_assign.body_chars', 1200);
+
+        try {
+            $payload = $this->llm->completeJson(
+                $this->systemPrompt(),
+                $this->userPrompt($message, $project, $executors, $bodyChars),
+            );
+        } catch (\Throwable $e) {
+            Log::warning('ApplyPeopleToProjectViaLlm: LLM call failed', [
+                'message_id' => $message->id,
+                'project_id' => $project->id,
+                'error' => $e->getMessage(),
+            ]);
+            ProcessingLog::query()->create([
+                'message_id' => $message->id,
+                'step' => 'llm_people_applied',
+                'status' => 'failed',
+                'details' => ['error' => $e->getMessage()],
+            ]);
+
+            return ['manager_id' => null, 'assignee_ids' => [], 'applied' => false];
+        }
+
+        $decision = $this->normalizePayload($payload, $executors);
+        if ($decision['manager_name'] === null
+            && $decision['manager_id'] === null
+            && $decision['assignee_names'] === []
+            && $decision['assignee_ids'] === []) {
+            ProcessingLog::query()->create([
+                'message_id' => $message->id,
+                'step' => 'llm_people_applied',
+                'status' => 'skipped',
+                'details' => [
+                    'reason' => $decision['reason'] ?? 'no_people',
+                    'confidence' => $decision['confidence'],
+                ],
+            ]);
+
+            return ['manager_id' => null, 'assignee_ids' => [], 'applied' => false];
+        }
+
+        $managerId = null;
+        $assigneeIds = [];
+        $changed = false;
+
+        $project->refresh();
+
+        if ($decision['manager_id'] !== null) {
+            $managerId = $decision['manager_id'];
+        } elseif ($decision['manager_name'] !== null) {
+            $managerId = (int) $this->findOrCreateExecutor->handle($decision['manager_name'])['executor']->id;
+        }
+
+        if ($managerId !== null) {
+            $project->executors()->syncWithoutDetaching([$managerId]);
+            if ($project->manager_executor_id === null) {
+                $project->manager_executor_id = $managerId;
+                $project->save();
+                $changed = true;
+            }
+            $manager = Executor::query()->find($managerId);
+            if ($manager !== null && $this->ensureManagerRole->handle($manager)) {
+                $changed = true;
+            }
+        }
+
+        foreach ($decision['assignee_ids'] as $id) {
+            $assigneeIds[] = $id;
+        }
+        foreach ($decision['assignee_names'] as $name) {
+            $assigneeIds[] = (int) $this->findOrCreateExecutor->handle($name)['executor']->id;
+        }
+        $assigneeIds = array_values(array_unique(array_filter($assigneeIds)));
+
+        if ($assigneeIds !== []) {
+            $project->executors()->syncWithoutDetaching($assigneeIds);
+            $changed = true;
+        }
+
+        ProcessingLog::query()->create([
+            'message_id' => $message->id,
+            'step' => 'llm_people_applied',
+            'status' => $changed ? 'ok' : 'skipped',
+            'details' => [
+                'project_id' => $project->id,
+                'manager_executor_id' => $project->manager_executor_id,
+                'proposed_manager_id' => $managerId,
+                'assignee_executor_ids' => $assigneeIds,
+                'confidence' => $decision['confidence'],
+                'reason' => $decision['reason'],
+                'model' => $this->llm->lastModel(),
+            ],
+        ]);
+
+        return [
+            'manager_id' => $managerId,
+            'assignee_ids' => $assigneeIds,
+            'applied' => $changed,
+        ];
+    }
+
+    private function systemPrompt(): string
+    {
+        return <<<'PROMPT'
+Ты — помощник менеджера проектов. По письму определи менеджера проекта и исполнителей (сотрудников нашей компании).
+Верни ТОЛЬКО валидный JSON без markdown.
+
+Схема:
+{
+  "manager_executor_id": integer or null,
+  "manager_name": string or null,
+  "assignee_executor_ids": [integer],
+  "assignee_names": [string],
+  "confidence": float 0..1,
+  "reason": string
+}
+
+Правила:
+- manager — ответственный менеджер со стороны агентства (не клиент).
+- assignees — исполнители/разработчики нашей компании, упомянутые как ответственные за работу.
+- id только из списка executors. Иначе null / не включай.
+- Если человека нет в списке, но ФИО явно наше (сотрудник) — manager_name / assignee_names.
+- Не путай клиентов и внешние контакты с исполнителями.
+- Автоответы, рассылки, пустые упоминания — все null / [].
+- Не выдумывай людей, которых нет в письме.
+- reason — кратко по-русски.
+PROMPT;
+    }
+
+    /**
+     * @param  \Illuminate\Support\Collection<int, Executor>  $executors
+     */
+    private function userPrompt(Message $message, Project $project, $executors, int $bodyChars): string
+    {
+        $body = (string) ($message->body ?? '');
+        if (mb_strlen($body) > $bodyChars) {
+            $body = mb_substr($body, 0, $bodyChars).'…';
+        }
+
+        $executorRows = $executors->map(static fn (Executor $e): array => [
+            'id' => (int) $e->id,
+            'name' => $e->fullName(),
+            'emails' => $e->emails ?? [],
+            'position' => $e->position,
+        ])->values()->all();
+
+        return "Контекст:\n".json_encode([
+            'project' => [
+                'id' => (int) $project->id,
+                'name' => (string) $project->name,
+                'manager_executor_id' => $project->manager_executor_id,
+            ],
+            'executors' => $executorRows,
+            'message' => [
+                'id' => (int) $message->id,
+                'sender' => (string) ($message->sender ?? ''),
+                'subject' => (string) ($message->subject ?? ''),
+                'classification' => $message->classification?->value,
+                'body' => $body,
+            ],
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @param  \Illuminate\Support\Collection<int, Executor>  $executors
+     * @return array{
+     *     manager_id: ?int,
+     *     manager_name: ?string,
+     *     assignee_ids: list<int>,
+     *     assignee_names: list<string>,
+     *     confidence: float,
+     *     reason: ?string
+     * }
+     */
+    private function normalizePayload(array $payload, $executors): array
+    {
+        $knownIds = $executors->pluck('id')->map(static fn ($id) => (int) $id)->all();
+        $knownSet = array_fill_keys($knownIds, true);
+
+        $managerId = isset($payload['manager_executor_id']) ? (int) $payload['manager_executor_id'] : null;
+        if ($managerId !== null && $managerId > 0 && ! isset($knownSet[$managerId])) {
+            $managerId = null;
+        }
+        if ($managerId !== null && $managerId <= 0) {
+            $managerId = null;
+        }
+
+        $managerName = isset($payload['manager_name']) && is_string($payload['manager_name'])
+            ? trim($payload['manager_name'])
+            : null;
+        if ($managerName === '') {
+            $managerName = null;
+        }
+
+        $assigneeIds = [];
+        foreach ($payload['assignee_executor_ids'] ?? [] as $raw) {
+            $id = (int) $raw;
+            if ($id > 0 && isset($knownSet[$id])) {
+                $assigneeIds[] = $id;
+            }
+        }
+
+        $assigneeNames = [];
+        foreach ($payload['assignee_names'] ?? [] as $raw) {
+            if (! is_string($raw)) {
+                continue;
+            }
+            $name = trim($raw);
+            if ($name !== '') {
+                $assigneeNames[] = $name;
+            }
+        }
+
+        return [
+            'manager_id' => $managerId,
+            'manager_name' => $managerName,
+            'assignee_ids' => array_values(array_unique($assigneeIds)),
+            'assignee_names' => array_values(array_unique($assigneeNames)),
+            'confidence' => isset($payload['confidence']) ? (float) $payload['confidence'] : 0.0,
+            'reason' => isset($payload['reason']) && is_string($payload['reason']) ? $payload['reason'] : null,
+        ];
+    }
+}

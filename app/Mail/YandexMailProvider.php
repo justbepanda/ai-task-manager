@@ -7,7 +7,9 @@ use App\Mail\Contracts\MailProvider;
 use App\Mail\DTO\NormalizedIncomingMessage;
 use App\Mail\Exceptions\MailProviderException;
 use App\Mail\Imap\ImapMailbox;
+use App\Mail\Imap\ImapIncrementalUids;
 use App\Mail\Imap\ImapMessageMapper;
+use App\Mail\Imap\ImapUtf7;
 use App\Models\MailSyncState;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -119,7 +121,24 @@ class YandexMailProvider implements MailProvider
     private function resolveUids(ImapMailbox $mailbox, int $lastUid, int $firstSyncLimit, string $folder): array
     {
         if ($lastUid > 0) {
-            return $mailbox->searchUids('UID '.($lastUid + 1).':*');
+            // Do not use SEARCH UID n:* — Yandex rejects the criterion (empty result
+            // and "Unknown search criterion: UID"), which can poison the connection.
+            $uids = ImapIncrementalUids::after(
+                $lastUid,
+                [],
+                $mailbox->searchUids('ALL'),
+            );
+
+            if ($uids !== []) {
+                Log::info('IMAP incremental sync via ALL filter', [
+                    'provider' => MailSource::Yandex->value,
+                    'folder' => $folder,
+                    'last_uid' => $lastUid,
+                    'new_uids' => count($uids),
+                ]);
+            }
+
+            return $uids;
         }
 
         // First-run policy: import only the newest N messages per folder.
@@ -180,9 +199,7 @@ class YandexMailProvider implements MailProvider
         $kept = [];
         foreach ($folders as $folder) {
             $haystack = mb_strtolower($folder);
-            $decoded = function_exists('imap_utf7_decode')
-                ? mb_strtolower((string) @imap_utf7_decode($folder))
-                : $haystack;
+            $decoded = mb_strtolower(ImapUtf7::decode($folder));
 
             $excluded = false;
             foreach ($excludeNeedles as $needle) {

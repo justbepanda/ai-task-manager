@@ -11,6 +11,7 @@ use App\Models\Message;
 use App\Models\ProcessingLog;
 use App\Models\Project;
 use App\Domain\Metrics\HypothesisMetricsRecorder;
+use App\Support\ProjectNameNormalizer;
 
 /**
  * Optionally create a Project from Redmine subject when matcher found none.
@@ -116,10 +117,10 @@ class AutoCreateProjectFromIncomingMail
      */
     private function findExistingByNameOrAlias(string $name, array $aliases): ?Project
     {
-        $needles = array_values(array_unique(array_filter(array_map(
-            static fn (string $s): string => mb_strtolower(trim($s)),
+        $needles = array_values(array_unique(array_filter(
             array_merge([$name], $aliases),
-        ), static fn (string $s): bool => $s !== '')));
+            static fn (string $s): bool => trim($s) !== '',
+        )));
 
         if ($needles === []) {
             return null;
@@ -131,17 +132,16 @@ class AutoCreateProjectFromIncomingMail
             ->get();
 
         foreach ($projects as $project) {
-            $haystacks = [mb_strtolower((string) $project->name)];
+            $haystacks = [(string) $project->name];
             foreach ($project->matchingRule?->keywords ?? [] as $keyword) {
-                $keyword = mb_strtolower(trim((string) $keyword));
-                if ($keyword !== '') {
-                    $haystacks[] = $keyword;
-                }
+                $haystacks[] = (string) $keyword;
             }
 
             foreach ($needles as $needle) {
-                if (in_array($needle, $haystacks, true)) {
-                    return $project;
+                foreach ($haystacks as $hay) {
+                    if (ProjectNameNormalizer::equals($needle, $hay)) {
+                        return $project;
+                    }
                 }
             }
         }

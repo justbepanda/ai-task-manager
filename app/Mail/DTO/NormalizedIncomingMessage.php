@@ -27,4 +27,17 @@ final class NormalizedIncomingMessage
         public readonly ?string $rawHeaders = null,
         public readonly ?string $rawBody = null,
     ) {}
+
+    /**
+     * True when IMAP returned no usable message content (failed open / empty fetch).
+     */
+    public function isEmpty(): bool
+    {
+        $subject = trim((string) $this->subject);
+        $sender = trim($this->sender);
+        $body = trim((string) $this->body);
+        $rawHeaders = trim((string) ($this->rawHeaders ?? ''));
+
+        return $subject === '' && $sender === '' && $body === '' && $rawHeaders === '';
+    }
 }

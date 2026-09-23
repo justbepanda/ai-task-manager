@@ -17,6 +17,7 @@ class AdminLabelsTest extends TestCase
         $this->assertSame('Проект создан автоматически', AdminLabels::processingStep('project_auto_created'));
         $this->assertSame('Распределение через LLM', AdminLabels::processingStep('project_auto_assigned_llm'));
         $this->assertSame('Redmine: люди проекта', AdminLabels::processingStep('redmine_people_applied'));
+        $this->assertSame('LLM: менеджер и исполнители', AdminLabels::processingStep('llm_people_applied'));
         $this->assertSame('Redmine: обратная связь', AdminLabels::processingStep('redmine_feedback_requires_manager'));
         $this->assertSame('Импорт', AdminLabels::processingStep('imported'));
         $this->assertSame('Успешно', AdminLabels::processingStatus('ok'));

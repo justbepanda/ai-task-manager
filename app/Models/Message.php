@@ -19,6 +19,7 @@ use Orchid\Screen\AsSource;
     'external_id',
     'conversation_id',
     'project_id',
+    'project_task_id',
     'user_id',
     'sender',
     'sender_role',
@@ -33,6 +34,7 @@ use Orchid\Screen\AsSource;
     'processing_status',
     'ai_summary',
     'ai_confidence',
+    'agent_facts',
     'requires_manager',
     'processing_error',
 ])]
@@ -49,6 +51,7 @@ class Message extends Model
             'cc' => 'array',
             'headers' => 'array',
             'metadata' => 'array',
+            'agent_facts' => 'array',
             'classification' => MessageClassification::class,
             'processing_status' => MessageProcessingStatus::class,
             'received_at' => 'datetime',
@@ -65,6 +68,11 @@ class Message extends Model
     public function project(): BelongsTo
     {
         return $this->belongsTo(Project::class);
+    }
+
+    public function projectTask(): BelongsTo
+    {
+        return $this->belongsTo(ProjectTask::class);
     }
 
     public function user(): BelongsTo

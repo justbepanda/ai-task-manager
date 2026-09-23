@@ -31,7 +31,7 @@ class MessageListScreen extends Screen
         }
 
         $query = Message::query()
-            ->with(['project', 'events'])
+            ->with(['project', 'projectTask', 'events'])
             ->latest('received_at');
 
         if (! empty($filter['classification'])) {
@@ -48,6 +48,14 @@ class MessageListScreen extends Screen
             } else {
                 $query->where('project_id', (int) $filter['project_id']);
             }
+        }
+
+        if (! empty($filter['project_task_id'])) {
+            $query->where('project_task_id', (int) $filter['project_task_id']);
+        }
+
+        if (($filter['requires_manager'] ?? null) === '1' || ($filter['requires_manager'] ?? null) === 1) {
+            $query->where('requires_manager', true);
         }
 
         return [
@@ -109,7 +117,7 @@ class MessageListScreen extends Screen
     {
         SyncYandexMailJob::dispatch(userId: auth()->id());
 
-        Toast::info('Синхронизация поставлена в очередь. Новые письма появятся после обработки worker’ом.');
+        Toast::info('Синхронизация в очереди. Нужен запущенный worker (docker compose up -d queue). Если писем нет — «Сервисные команды» → «Синхронизировать почту сейчас (без очереди)».');
     }
 
     public function rebuildIgnored(): void

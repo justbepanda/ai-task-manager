@@ -62,7 +62,11 @@
         @endphp
         <section class="assign-group" data-assign-group="{{ $groupId }}">
             <h3>
-                {{ $group->title }}
+                @if (! $group->isNew && $group->project)
+                    <a href="{{ route('platform.projects.edit', $group->project) }}">{{ $group->title }}</a>
+                @else
+                    {{ $group->title }}
+                @endif
                 @if ($group->isNew)
                     <span class="badge-new">создать</span>
                 @endif
@@ -133,7 +137,7 @@
                             </td>
                             <td>{{ optional($m->received_at)->format('d.m.Y H:i') }}</td>
                             <td>{{ \Illuminate\Support\Str::limit((string) $m->sender, 40) }}</td>
-                            <td>{{ \Illuminate\Support\Str::limit((string) $m->subject, 60) }}</td>
+                            <td><a href="{{ route('platform.messages.view', $m) }}">{{ \Illuminate\Support\Str::limit((string) $m->subject, 60) }}</a></td>
                             <td class="reasons">
                                 {{ number_format($suggestion->score, 2) }} — {{ implode(', ', $suggestion->reasons) }}
                             </td>
@@ -194,7 +198,7 @@
                             <td><a href="{{ route('platform.messages.view', $m) }}">#{{ $m->id }}</a></td>
                             <td>{{ optional($m->received_at)->format('d.m.Y H:i') }}</td>
                             <td>{{ \Illuminate\Support\Str::limit((string) $m->sender, 40) }}</td>
-                            <td>{{ \Illuminate\Support\Str::limit((string) $m->subject, 60) }}</td>
+                            <td><a href="{{ route('platform.messages.view', $m) }}">{{ \Illuminate\Support\Str::limit((string) $m->subject, 60) }}</a></td>
                         </tr>
                     @endforeach
                 </tbody>

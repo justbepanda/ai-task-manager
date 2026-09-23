@@ -14,6 +14,7 @@ readonly class MessageContext
      * @param  array<string, mixed>|null  $matchingHints
      * @param  list<array{field: string, ai_value: string|null, manager_value: string|null}>  $analysisCorrections
      * @param  list<array{field: string, ai_value: string|null, manager_value: string|null}>  $recentProjectCorrections
+     * @param  array<string, mixed>|null  $conversationAgentState
      * @param  string  $analysisMode  full|technical_summary
      */
     public function __construct(
@@ -27,6 +28,7 @@ readonly class MessageContext
         public ?array $matchingHints = null,
         public array $analysisCorrections = [],
         public array $recentProjectCorrections = [],
+        public ?array $conversationAgentState = null,
         public string $analysisMode = 'full',
     ) {}
 
@@ -38,6 +40,7 @@ readonly class MessageContext
         $payload = [
             'analysis_mode' => $this->analysisMode,
             'message' => $this->message,
+            'conversation_agent_state' => $this->conversationAgentState,
             'conversation_messages' => $this->conversationMessages,
             'project' => $this->project,
             'instruction' => $this->instruction,

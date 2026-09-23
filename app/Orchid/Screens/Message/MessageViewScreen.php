@@ -41,7 +41,7 @@ class MessageViewScreen extends Screen
 
     public function query(Message $message, ResolveMessageSenderPerson $resolver): iterable
     {
-        $message->load(['project', 'events', 'analysisCorrections', 'processingLogs']);
+        $message->load(['project', 'projectTask', 'events', 'analysisCorrections', 'processingLogs']);
         $this->senderPerson = $resolver->resolve($message->sender);
 
         return [
@@ -104,9 +104,34 @@ class MessageViewScreen extends Screen
                 Sight::make('received_at', 'Дата')->render(fn (Message $m) => $m->received_at?->format('d.m.Y H:i:s') ?? '—'),
                 Sight::make('processing_status', 'Статус')->render(fn (Message $m) => e($m->processing_status->label())),
                 Sight::make('ai_summary', 'Краткое описание')->render(fn (Message $m) => e((string) ($m->ai_summary ?: '—'))),
+                Sight::make('project', 'Проект')->render(function (Message $m) {
+                    if ($m->project === null) {
+                        return '—';
+                    }
+
+                    return Link::make($m->project->name)
+                        ->route('platform.projects.edit', $m->project);
+                }),
+                Sight::make('project_task', 'Задача')->render(function (Message $m) {
+                    $task = $m->projectTask;
+                    if ($task === null) {
+                        return '—';
+                    }
+
+                    return Link::make($task->displayLabel())
+                        ->route('platform.tasks.view', $task);
+                }),
                 Sight::make('ai_confidence', 'Уверенность')->render(fn (Message $m) => $m->ai_confidence !== null ? e((string) $m->ai_confidence) : '—'),
                 Sight::make('requires_manager', 'Требуется менеджер')->render(fn (Message $m) => $m->requires_manager === null ? '—' : ($m->requires_manager ? 'да' : 'нет')),
-                Sight::make('event_type', 'Тип события')->render(fn (Message $m) => e($m->events->first()?->type->label() ?? '—')),
+                Sight::make('event_type', 'Тип события')->render(function (Message $m) {
+                    $event = $m->events->first();
+                    if ($event === null) {
+                        return '—';
+                    }
+
+                    return Link::make($event->type->label())
+                        ->route('platform.messages.view', $m);
+                }),
                 Sight::make('project_candidates', 'Кандидаты проектов')->render(function (Message $m) {
                     $match = is_array($m->metadata) ? ($m->metadata['project_match'] ?? null) : null;
                     if (! is_array($match)) {
@@ -131,7 +156,7 @@ class MessageViewScreen extends Screen
                         ->whereIn('id', $projectIds)
                         ->pluck('name', 'id');
 
-                    $lines = [];
+                    $parts = [];
                     foreach ($candidates as $c) {
                         if (! is_array($c) || ! isset($c['project_id'])) {
                             continue;
@@ -140,10 +165,13 @@ class MessageViewScreen extends Screen
                         $score = isset($c['score']) ? number_format((float) $c['score'], 2) : '?';
                         $reasons = is_array($c['reasons'] ?? null) ? implode(', ', $c['reasons']) : '';
                         $name = $names[$id] ?? ('#'.$id);
-                        $lines[] = sprintf('%s — score %s%s', $name, $score, $reasons !== '' ? ' ('.$reasons.')' : '');
+                        $url = route('platform.projects.edit', $id);
+                        $label = e($name).' — score '.e($score)
+                            .($reasons !== '' ? ' ('.e($reasons).')' : '');
+                        $parts[] = '<a href="'.e($url).'">'.$label.'</a>';
                     }
 
-                    return e(implode('; ', $lines).$ambiguous);
+                    return implode('; ', $parts).e($ambiguous);
                 }),
                 Sight::make('ai_latest_body', 'Для AI (последний ответ)')->render(function (Message $m) {
                     $latest = app(EmailLatestReplyExtractor::class)->latest((string) ($m->body ?? ''), 2000);

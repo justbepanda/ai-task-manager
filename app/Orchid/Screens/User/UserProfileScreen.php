@@ -79,6 +79,7 @@ class UserProfileScreen extends Screen
             Layout::block(UserEditLayout::class)
                 ->title('Данные профиля')
                 ->description('Обновите имя и адрес электронной почты.')
+                ->vertical()
                 ->commands(
                     Button::make('Сохранить')
                         ->type(Color::BASIC())
@@ -89,6 +90,7 @@ class UserProfileScreen extends Screen
             Layout::block(ProfilePasswordLayout::class)
                 ->title('Смена пароля')
                 ->description('Используйте длинный случайный пароль для защиты учётной записи.')
+                ->vertical()
                 ->commands(
                     Button::make('Обновить пароль')
                         ->type(Color::BASIC())

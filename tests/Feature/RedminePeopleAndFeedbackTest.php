@@ -64,6 +64,7 @@ class RedminePeopleAndFeedbackTest extends TestCase
         $this->assertNotNull($project->manager_executor_id);
         $this->assertSame('Мария', $project->managerExecutor?->first_name);
         $this->assertSame('Иванова', $project->managerExecutor?->last_name);
+        $this->assertSame('Менеджер', $project->managerExecutor?->position);
 
         $names = $project->executors->map(fn (Executor $e) => $e->fullName())->all();
         $this->assertTrue(collect($names)->contains(fn (string $n) => str_contains($n, 'Сипров')));

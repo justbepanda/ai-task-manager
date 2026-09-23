@@ -182,4 +182,74 @@ class MailFilterMatcherTest extends TestCase
 
         $this->assertNull(app(MailFilterMatcher::class)->match($message));
     }
+
+    #[Test]
+    public function lk_qa_noise_is_ignored_but_fault_reports_are_not(): void
+    {
+        MailFilterSetting::query()->create([
+            'id' => 1,
+            'blocked_emails' => [],
+            'blocked_domains' => [],
+            'subject_stop_words' => [
+                'Новая заявка на брокер-тур',
+                'Ваш список недвижимости',
+                \Database\Seeders\MailFilterSettingSeeder::LK_BOOKING_SUBJECT_REGEX,
+            ],
+            'body_stop_words' => [
+                'согласен с условиями оплаты и отмены бронирования',
+                'Вы можете ознакомиться со списком в приложении',
+            ],
+        ]);
+
+        $matcher = app(MailFilterMatcher::class);
+
+        $this->assertNotNull($matcher->matchParts(
+            sender: 'LK@tekta.com',
+            subject: 'Плашиннов Иван, 2-комнатная евро № 308',
+            body: 'Клиент согласен с условиями оплаты и отмены бронирования',
+        ));
+        $this->assertNotNull($matcher->matchParts(
+            sender: 'LK@tekta.com',
+            subject: 'Иванова, Студия № 222',
+            body: '',
+        ));
+        $this->assertNotNull($matcher->matchParts(
+            sender: 'LK@tekta.com',
+            subject: 'Новая заявка на брокер-тур',
+            body: '',
+        ));
+        $this->assertNotNull($matcher->matchParts(
+            sender: 'LK@tekta.com',
+            subject: 'Ваш список недвижимости',
+            body: 'Вы можете ознакомиться со списком в приложении',
+        ));
+        $this->assertNull($matcher->matchParts(
+            sender: 'LK@tekta.com',
+            subject: 'Сообщение о неисправности',
+            body: 'Не открывается карточка клиента на стенде lk-dev.tekta.ru',
+        ));
+    }
+
+    #[Test]
+    public function automatic_reply_subject_is_ignored(): void
+    {
+        MailFilterSetting::query()->create([
+            'id' => 1,
+            'blocked_emails' => [],
+            'blocked_domains' => [],
+            'subject_stop_words' => [
+                'Автоматический ответ:',
+                'Автоматический ответ',
+            ],
+            'body_stop_words' => [],
+        ]);
+
+        $matcher = app(MailFilterMatcher::class);
+
+        $this->assertNotNull($matcher->matchParts(
+            sender: 'ed@certit.ru',
+            subject: 'Автоматический ответ: Запрос по реализации узбекской версии планировок в Profitbase',
+            body: 'Я в отпуске',
+        ));
+    }
 }

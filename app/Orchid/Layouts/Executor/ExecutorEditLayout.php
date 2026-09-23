@@ -31,7 +31,8 @@ class ExecutorEditLayout extends Rows
                 ->maxlength(255),
 
             Input::make('executor.position')
-                ->title('Должность')
+                ->title('Роль')
+                ->help('Например: Менеджер, Разработчик. Заполняется автоматически при назначении менеджером проекта.')
                 ->maxlength(255),
 
             TextArea::make('executor.emails')

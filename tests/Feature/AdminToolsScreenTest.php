@@ -25,6 +25,9 @@ class AdminToolsScreenTest extends TestCase
         $this->assertContains('reprocess', $ids);
         $this->assertContains('apply_mail_filters', $ids);
         $this->assertContains('detect_follow_ups_sync', $ids);
+        $this->assertContains('rebuild_tasks', $ids);
+        $this->assertContains('apply_project_people', $ids);
+        $this->assertContains('merge_duplicate_projects', $ids);
         $this->assertContains('metrics_report', $ids);
         $this->assertContains('db_fresh_seed', $ids);
 

@@ -60,6 +60,11 @@ class Project extends Model
         return $this->hasMany(Message::class);
     }
 
+    public function tasks(): HasMany
+    {
+        return $this->hasMany(ProjectTask::class);
+    }
+
     public function events(): HasMany
     {
         return $this->hasMany(Event::class);

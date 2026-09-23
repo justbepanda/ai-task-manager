@@ -20,7 +20,7 @@ class ExecutorListLayout extends Table
             TD::make('full_name', 'ФИО')
                 ->render(fn (Executor $executor) => Link::make($executor->fullName())
                     ->route('platform.executors.edit', $executor)),
-            TD::make('position', 'Должность'),
+            TD::make('position', 'Роль'),
             TD::make('is_active', 'Активен')
                 ->render(fn (Executor $executor) => $executor->is_active ? 'Да' : 'Нет'),
             TD::make('projects_count', 'Проекты')

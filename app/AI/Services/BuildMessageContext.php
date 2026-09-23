@@ -20,7 +20,7 @@ class BuildMessageContext
 
     public function handle(Message $message): MessageContext
     {
-        $message->loadMissing(['conversation', 'project.instruction', 'analysisCorrections']);
+        $message->loadMissing(['conversation', 'project.instruction', 'analysisCorrections', 'projectTask']);
 
         $conversationLimit = (int) config('ai.context.conversation_messages_limit', 10);
         $eventsLimit = (int) config('ai.context.recent_events_limit', 10);
@@ -57,22 +57,39 @@ class BuildMessageContext
             $conversationMessages = $conversationQuery
                 ->orderByDesc('received_at')
                 ->limit($conversationLimit)
-                ->get(['id', 'sender', 'subject', 'body', 'received_at', 'classification'])
+                ->get(['id', 'sender', 'subject', 'body', 'received_at', 'classification', 'ai_summary', 'agent_facts'])
                 ->sortBy('received_at')
                 ->values()
                 ->map(function (Message $m) use ($conversationBodyChars): array {
-                    $latest = $this->replyExtractor->latest((string) ($m->body ?? ''), $conversationBodyChars);
-
-                    return [
+                    $facts = is_array($m->agent_facts) ? $m->agent_facts : null;
+                    $row = [
                         'id' => $m->id,
                         'sender' => $m->sender,
                         'subject' => $m->subject,
-                        'body' => $latest,
                         'received_at' => $m->received_at?->toIso8601String(),
                         'classification' => $m->classification?->value,
+                        'ai_summary' => $m->ai_summary,
+                        'agent_facts' => $facts,
                     ];
+
+                    // Prefer compact facts; keep a short latest body as fallback / detail.
+                    if ($facts === null || ($facts['summary'] ?? null) === null) {
+                        $row['body'] = $this->replyExtractor->latest((string) ($m->body ?? ''), $conversationBodyChars);
+                    } else {
+                        $row['body'] = $this->replyExtractor->latest(
+                            (string) ($m->body ?? ''),
+                            min(240, $conversationBodyChars),
+                        );
+                    }
+
+                    return $row;
                 })
                 ->all();
+        }
+
+        $conversationAgentState = null;
+        if ($message->conversation !== null && is_array($message->conversation->agent_state)) {
+            $conversationAgentState = $message->conversation->agent_state;
         }
 
         $project = null;
@@ -140,6 +157,15 @@ class BuildMessageContext
                 'received_at' => $message->received_at?->toIso8601String(),
                 'classification' => $message->classification?->value,
                 'project_id' => $message->project_id,
+                'project_task_id' => $message->project_task_id,
+                'project_task' => $message->projectTask !== null ? [
+                    'id' => $message->projectTask->id,
+                    'source' => $message->projectTask->source->value,
+                    'external_key' => $message->projectTask->external_key,
+                    'title' => $message->projectTask->title,
+                    'status' => $message->projectTask->status->value,
+                ] : null,
+                'agent_facts' => is_array($message->agent_facts) ? $message->agent_facts : null,
             ],
             conversationMessages: $conversationMessages,
             project: $project,
@@ -150,6 +176,7 @@ class BuildMessageContext
             matchingHints: $matchingHints,
             analysisCorrections: $this->mapCorrections($message->analysisCorrections),
             recentProjectCorrections: $this->loadRecentProjectCorrections($message, $correctionsLimit),
+            conversationAgentState: $conversationAgentState,
             analysisMode: $analysisMode,
         );
     }

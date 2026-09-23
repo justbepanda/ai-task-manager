@@ -52,7 +52,9 @@ services:
   queue:
     <<: *php-common
     container_name: ${APP_NAME}-queue
-    command: php artisan queue:work redis --sleep=1 --tries=3 --timeout=180 --max-jobs=50 --max-time=3600
+    # max-jobs/max-time exit with code 0 — need unless-stopped so the worker respawns.
+    restart: unless-stopped
+    command: php artisan queue:work redis --sleep=1 --tries=3 --timeout=600 --max-jobs=50 --max-time=3600
     depends_on:
       - php
       - redis

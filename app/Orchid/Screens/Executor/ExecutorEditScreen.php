@@ -6,6 +6,7 @@ namespace App\Orchid\Screens\Executor;
 
 use App\Domain\Executors\ExecutorService;
 use App\Models\Executor;
+use App\Models\Project;
 use App\Orchid\Layouts\Executor\ExecutorEditLayout;
 use Illuminate\Http\Request;
 use Orchid\Screen\Actions\Button;
@@ -30,7 +31,12 @@ class ExecutorEditScreen extends Screen
         }
 
         $executor->setAttribute('emails', $service->listToLines($executor->emails));
-        $executor->setAttribute('project_ids', $executor->projects->pluck('id')->all());
+        $executor->setAttribute(
+            'project_ids',
+            $executor->exists
+                ? $executor->projects->pluck('id')->all()
+                : $this->requestedProjectIds()
+        );
 
         return [
             'executor' => $executor,
@@ -71,7 +77,8 @@ class ExecutorEditScreen extends Screen
         return [
             Layout::block(ExecutorEditLayout::class)
                 ->title('Данные исполнителя')
-                ->description('Исполнители связываются с проектами независимо от клиентов.'),
+                ->description('Исполнители связываются с проектами независимо от клиентов.')
+                ->vertical(),
         ];
     }
 
@@ -119,5 +126,20 @@ class ExecutorEditScreen extends Screen
         Toast::info('Исполнитель удалён.');
 
         return redirect()->route('platform.executors');
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function requestedProjectIds(): array
+    {
+        $projectId = (int) request()->query('project_id', 0);
+        if ($projectId <= 0) {
+            return [];
+        }
+
+        return Project::query()->whereKey($projectId)->exists()
+            ? [$projectId]
+            : [];
     }
 }

@@ -103,6 +103,7 @@ class UserEditScreen extends Screen
             Layout::block(UserEditLayout::class)
                 ->title('Данные профиля')
                 ->description('Обновите имя и адрес электронной почты пользователя.')
+                ->vertical()
                 ->commands(
                     Button::make('Сохранить')
                         ->type(Color::BASIC)
@@ -114,6 +115,7 @@ class UserEditScreen extends Screen
             Layout::block(UserPasswordLayout::class)
                 ->title('Пароль')
                 ->description('Используйте длинный случайный пароль для защиты учётной записи.')
+                ->vertical()
                 ->commands(
                     Button::make('Сохранить')
                         ->type(Color::BASIC)
@@ -125,6 +127,7 @@ class UserEditScreen extends Screen
             Layout::block(UserRoleLayout::class)
                 ->title('Роли')
                 ->description('Роль определяет набор задач, которые разрешено выполнять пользователю.')
+                ->vertical()
                 ->commands(
                     Button::make('Сохранить')
                         ->type(Color::BASIC)
@@ -136,6 +139,7 @@ class UserEditScreen extends Screen
             Layout::block(RolePermissionLayout::class)
                 ->title('Права доступа')
                 ->description('Разрешите пользователю действия, не предусмотренные его ролями.')
+                ->vertical()
                 ->commands(
                     Button::make('Сохранить')
                         ->type(Color::BASIC)

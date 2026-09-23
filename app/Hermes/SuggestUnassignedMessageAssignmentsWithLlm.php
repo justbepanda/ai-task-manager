@@ -11,6 +11,7 @@ use App\Enums\ProjectStatus;
 use App\Hermes\Contracts\LlmProvider;
 use App\Models\Message;
 use App\Models\Project;
+use App\Support\MailRoutingGuidance;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
@@ -57,7 +58,7 @@ class SuggestUnassignedMessageAssignmentsWithLlm
 
     private function systemPrompt(): string
     {
-        return <<<'PROMPT'
+        $base = <<<'PROMPT'
 Ты — Hermes, помощник менеджера проектов. Распредели письма по проектам.
 Верни ТОЛЬКО JSON:
 
@@ -84,6 +85,8 @@ class SuggestUnassignedMessageAssignmentsWithLlm
 - Для Redmine смотри тему: [Имя - Tracker #id] → имя проекта (первый алиас до запятой).
 - Не отправляй письма и не меняй данные сам — только предложение.
 PROMPT;
+
+        return $base."\n".MailRoutingGuidance::projectAssignBlock();
     }
 
     /**

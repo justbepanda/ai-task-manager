@@ -30,6 +30,7 @@ class MailFilterSettingSeederTest extends TestCase
         $this->assertContains('Заявка на обратную связь', $settings->subject_stop_words);
         $this->assertContains('ЛК Брокера, регистрация', $settings->subject_stop_words);
         $this->assertContains('calendar.yandex.ru', $settings->blocked_domains);
+        $this->assertContains('360.yandex.ru', $settings->blocked_domains);
         $this->assertContains(
             MailFilterSettingSeeder::REDMINE_PODDERZHKA_OCENKA_REGEX,
             $settings->subject_stop_words,

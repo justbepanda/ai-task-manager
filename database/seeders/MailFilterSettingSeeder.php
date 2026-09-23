@@ -14,6 +14,8 @@ class MailFilterSettingSeeder extends Seeder
      */
     private const REMOVED_SUBJECT_STOP_WORDS = [
         'Оценка:',
+        // Broken: required a char between «Студия» and «№», so «Студия № 222» never matched.
+        'regex:/,\s*(?:\d+-комнатн|Студия\s+.+\s*№)/ui',
     ];
 
     /**
@@ -23,14 +25,25 @@ class MailFilterSettingSeeder extends Seeder
     public const REDMINE_PODDERZHKA_OCENKA_REGEX = 'regex:/\[Поддержка\s*-[^\]]*\][^\n]*Оценка:\s+[А-ЯЁA-Z][а-яёa-zЁё]+(?:\s+[А-ЯЁA-Z][а-яёa-zЁё]+)+/u';
 
     /**
+     * Real-estate LK booking confirmation subjects:
+     * «Плашиннов …, 2-комнатная евро № 308» / «…, Студия № 222».
+     * Does not match «Сообщение о неисправности».
+     *
+     * `.*?` (not `.+`) so «Студия №» with only whitespace before № still matches.
+     */
+    public const LK_BOOKING_SUBJECT_REGEX = 'regex:/,\s*(?:\d+-комнатн|Студия\s+.*?№)/ui';
+
+    /**
      * Default global ignore list:
      * - Yandex ID / auth noise
      * - site lead forms (callback / booking / installment)
      * - ЛК registration / user-update automations (not project mail)
-     * - calendar invites
+     * - real-estate LK QA: booking confirmations, broker tours, property lists
+     * - calendar invites / Yandex 360 marketing
      * - Redmine «Поддержка» personal score notifications
      *
      * Do not use bare «Обратная связь» — that matches Redmine ticket subjects.
+     * Do not block LK@tekta.com entirely — «Сообщение о неисправности» is project work.
      *
      * @return array{
      *     blocked_emails: list<string>,
@@ -56,6 +69,7 @@ class MailFilterSettingSeeder extends Seeder
                 'accounts.google.com',
                 'facebookmail.com',
                 'calendar.yandex.ru',
+                '360.yandex.ru',
             ],
             'subject_stop_words' => [
                 'пароль для приложения',
@@ -76,11 +90,20 @@ class MailFilterSettingSeeder extends Seeder
                 'ЛК Клиента, регистрация',
                 'Зарегистрирован пользователь',
                 'Обновление пользователя',
+                // OOO / vacation auto-replies (not project work).
+                'Автоматический ответ:',
+                'Автоматический ответ',
+                // Real-estate LK QA / stand checks (booking, broker tour, lists).
+                'Новая заявка на брокер-тур',
+                'Ваш список недвижимости',
+                self::LK_BOOKING_SUBJECT_REGEX,
                 self::REDMINE_PODDERZHKA_OCENKA_REGEX,
             ],
             'body_stop_words' => [
                 'На это письмо не нужно отвечать',
                 'Яндекс ID',
+                'согласен с условиями оплаты и отмены бронирования',
+                'Вы можете ознакомиться со списком в приложении',
             ],
         ];
     }

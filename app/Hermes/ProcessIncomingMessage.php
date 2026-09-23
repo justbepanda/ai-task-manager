@@ -4,9 +4,11 @@ namespace App\Hermes;
 
 use App\AI\Services\AnalyzeMessage;
 use App\Domain\Classification\ClassifyAndMatchMessage;
+use App\Domain\Projects\ApplyPeopleToProjectViaLlm;
 use App\Domain\Projects\ApplyRedmineFeedbackRequiresManager;
 use App\Domain\Projects\ApplyRedminePeopleToProject;
 use App\Domain\Projects\AutoAssignProjectViaLlm;
+use App\Domain\Tasks\ResolveOrCreateProjectTask;
 use App\Enums\MessageClassification;
 use App\Hermes\DTO\HermesProcessResult;
 use App\Models\AppSetting;
@@ -20,6 +22,7 @@ use App\Support\SensitiveDataSanitizer;
  * tools (classify + project match [+ Redmine auto-create])
  * → optional LLM auto-assign
  * → Redmine people (Автор / Назначена)
+ * → resolve/create ProjectTask
  * → optional LLM propose → Laravel apply
  * → Redmine «Обратная связь» → requires_manager.
  */
@@ -29,7 +32,9 @@ class ProcessIncomingMessage
         private readonly ClassifyAndMatchMessage $classifyAndMatch,
         private readonly AutoAssignProjectViaLlm $autoAssignViaLlm,
         private readonly ApplyRedminePeopleToProject $applyRedminePeople,
+        private readonly ApplyPeopleToProjectViaLlm $applyPeopleViaLlm,
         private readonly ApplyRedmineFeedbackRequiresManager $applyRedmineFeedback,
+        private readonly ResolveOrCreateProjectTask $resolveProjectTask,
         private readonly AnalyzeMessage $analyzeMessage,
     ) {}
 
@@ -53,6 +58,9 @@ class ProcessIncomingMessage
 
         $this->applyPeopleIfPossible($message);
 
+        $task = $this->resolveProjectTask->handle($message->fresh(['conversation']) ?? $message);
+        $message = $message->fresh() ?? $message;
+
         $needsLlm = $this->needsLlmAnalysis($message);
 
         ProcessingLog::query()->create([
@@ -62,10 +70,11 @@ class ProcessIncomingMessage
             'details' => SensitiveDataSanitizer::sanitizeDetails([
                 'classification' => $message->classification?->value,
                 'project_id' => $message->project_id,
+                'project_task_id' => $task?->id ?? $message->project_task_id,
                 'needs_llm' => $needsLlm,
                 'llm_assign_attempted' => $llmAssignAttempted,
                 'llm_assign_applied' => $llmAssignApplied,
-                'stages' => ['classification', 'project_identification', 'context_retrieval'],
+                'stages' => ['classification', 'project_identification', 'task_resolution', 'context_retrieval'],
             ]),
         ]);
 
@@ -111,7 +120,16 @@ class ProcessIncomingMessage
             return;
         }
 
-        $this->applyRedminePeople->handle($message, $project);
+        $redmine = $this->applyRedminePeople->handle($message, $project);
+        $project->refresh();
+
+        // LLM fills gaps: non-Redmine mail, or Redmine without both author+assignee / without manager.
+        $redmineComplete = $redmine['manager_id'] !== null && $redmine['assignee_id'] !== null;
+        if ($redmineComplete && $project->manager_executor_id !== null) {
+            return;
+        }
+
+        $this->applyPeopleViaLlm->handle($message, $project);
     }
 
     private function needsLlmAnalysis(Message $message): bool

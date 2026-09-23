@@ -4,6 +4,7 @@ namespace App\Domain\Projects;
 
 use App\Models\Message;
 use App\Support\EmailAddress;
+use App\Support\ProjectNameNormalizer;
 
 /**
  * Extracts project name candidates from Redmine notification subjects.
@@ -92,33 +93,25 @@ class RedmineSubjectProjectExtractor
      */
     public function matchProjectName(string $projectName, array $candidates): ?string
     {
-        $normalizedProject = $this->normalize($projectName);
-        if ($normalizedProject === '') {
+        if (ProjectNameNormalizer::fold($projectName) === '') {
             return null;
         }
 
+        // Exact first: Tekta and Текта fold alike, but are distinct aliases in the subject.
         foreach ($candidates as $candidate) {
-            $normalizedCandidate = $this->normalize($candidate);
-            if ($normalizedCandidate === '') {
-                continue;
-            }
-
-            if ($normalizedProject === $normalizedCandidate) {
+            if ($projectName === $candidate) {
                 return $candidate;
             }
         }
 
         foreach ($candidates as $candidate) {
-            $normalizedCandidate = $this->normalize($candidate);
-            if (mb_strlen($normalizedCandidate) < 4) {
-                continue;
+            if (ProjectNameNormalizer::equals($projectName, $candidate)) {
+                return $candidate;
             }
+        }
 
-            // Prefix/whole-name only — avoid "поддержка" matching "Redmine / техподдержка".
-            if (
-                str_starts_with($normalizedProject, $normalizedCandidate)
-                || str_starts_with($normalizedCandidate, $normalizedProject)
-            ) {
+        foreach ($candidates as $candidate) {
+            if (ProjectNameNormalizer::matches($projectName, $candidate, minPrefixLength: 4)) {
                 return $candidate;
             }
         }
@@ -143,14 +136,6 @@ class RedmineSubjectProjectExtractor
         }
 
         return trim($bracketContent);
-    }
-
-    private function normalize(string $value): string
-    {
-        $value = mb_strtolower(trim($value));
-        $value = preg_replace('/\s+/u', ' ', $value) ?? $value;
-
-        return $value;
     }
 
     /**

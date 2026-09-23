@@ -79,6 +79,81 @@ class GeminiAiAnalyzerRetryTest extends TestCase
         $this->assertTrue($result['ok']);
     }
 
+    public function test_skips_404_model_and_uses_next_fallback(): void
+    {
+        config([
+            'ai.gemini.api_key' => 'test-key',
+            'ai.gemini.model' => 'gemini-dead',
+            'ai.gemini.fallback_models' => ['gemini-alive'],
+            'ai.gemini.retry.max_attempts' => 1,
+            'ai.gemini.retry.base_delay_ms' => 0,
+            'ai.gemini.thinking_level' => null,
+        ]);
+
+        Http::fake(function ($request) {
+            if (str_contains($request->url(), 'gemini-dead')) {
+                return Http::response(['error' => ['message' => 'not found']], 404);
+            }
+
+            return Http::response([
+                'candidates' => [
+                    [
+                        'content' => [
+                            'parts' => [
+                                ['text' => '{"ok":true}'],
+                            ],
+                        ],
+                    ],
+                ],
+            ], 200);
+        });
+
+        $result = (new GeminiAiAnalyzer)->completeJson('sys', 'user');
+
+        $this->assertTrue($result['ok']);
+    }
+
+    public function test_switches_to_fallback_immediately_on_429(): void
+    {
+        config([
+            'ai.gemini.api_key' => 'test-key',
+            'ai.gemini.model' => 'gemini-3.6-flash',
+            'ai.gemini.fallback_models' => ['gemini-3.5-flash'],
+            'ai.gemini.retry.max_attempts' => 3,
+            'ai.gemini.retry.base_delay_ms' => 0,
+            'ai.gemini.thinking_level' => null,
+        ]);
+
+        $primaryHits = 0;
+
+        Http::fake(function ($request) use (&$primaryHits) {
+            if (str_contains($request->url(), 'gemini-3.6-flash')) {
+                $primaryHits++;
+
+                return Http::response(['error' => ['message' => 'rate limit']], 429);
+            }
+
+            return Http::response([
+                'candidates' => [
+                    [
+                        'content' => [
+                            'parts' => [
+                                ['text' => '{"ok":true}'],
+                            ],
+                        ],
+                    ],
+                ],
+            ], 200);
+        });
+
+        $analyzer = new GeminiAiAnalyzer;
+        $result = $analyzer->completeJson('sys', 'user');
+
+        $this->assertTrue($result['ok']);
+        $this->assertSame(1, $primaryHits, '429 should switch to fallback without burning all retries');
+        $this->assertSame('gemini-3.5-flash', $analyzer->lastModel());
+    }
+
     public function test_503_message_is_user_friendly(): void
     {
         config([

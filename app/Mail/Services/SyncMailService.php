@@ -79,6 +79,27 @@ class SyncMailService
         $uidvalidity = $state->uidvalidity;
 
         foreach ($this->provider->fetchNewMessages($state) as $normalized) {
+            if ($normalized->isEmpty()) {
+                $skipped++;
+                Log::warning('Skipping empty IMAP message (likely unreadable folder name)', [
+                    'provider' => $source->value,
+                    'folder' => $folder,
+                    'external_id' => $normalized->externalId,
+                    'imap_uid' => $normalized->metadata['imap_uid'] ?? null,
+                    'uidvalidity' => $normalized->metadata['uidvalidity'] ?? null,
+                ]);
+
+                $uid = (int) ($normalized->metadata['imap_uid'] ?? 0);
+                if ($uid > $maxUid) {
+                    $maxUid = $uid;
+                }
+                if (isset($normalized->metadata['uidvalidity'])) {
+                    $uidvalidity = (int) $normalized->metadata['uidvalidity'];
+                }
+
+                continue;
+            }
+
             $result = $this->persist->handle($normalized);
 
             if ($result['created']) {
