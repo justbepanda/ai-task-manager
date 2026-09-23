@@ -24,7 +24,15 @@ class ProjectListLayout extends Table
             TD::make('status', 'Статус')
                 ->render(fn (Project $project) => e($project->status->label())),
             TD::make('manager', 'Менеджер')
-                ->render(fn (Project $project) => e($project->managerExecutor?->fullName() ?? '—')),
+                ->render(function (Project $project) {
+                    $manager = $project->managerExecutor;
+                    if ($manager === null) {
+                        return '—';
+                    }
+
+                    return Link::make($manager->fullName())
+                        ->route('platform.executors.edit', $manager);
+                }),
             TD::make('messages_count', 'Входящие')
                 ->align(TD::ALIGN_CENTER)
                 ->width('120')

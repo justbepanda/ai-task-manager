@@ -17,6 +17,7 @@ use App\Models\Executor;
 use App\Models\ManagerAction;
 use App\Models\Message;
 use App\Models\Project;
+use App\Models\ProjectTask;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use PHPUnit\Framework\Attributes\Test;
@@ -35,7 +36,9 @@ class OrchidAdminScreensTest extends TestCase
             ->actingAs($admin)
             ->display()
             ->assertOk()
-            ->assertSee('Обзор');
+            ->assertSee('Обзор')
+            ->assertSee('Всего писем')
+            ->assertDontSee('Синхронизировать почту');
     }
 
     #[Test]
@@ -75,6 +78,36 @@ class OrchidAdminScreensTest extends TestCase
     }
 
     #[Test]
+    public function admin_can_open_tasks_list_and_view(): void
+    {
+        $admin = $this->makeAdmin();
+        $project = Project::factory()->create(['name' => 'Task Project', 'status' => ProjectStatus::Active]);
+        $task = ProjectTask::query()->create([
+            'project_id' => $project->id,
+            'source' => \App\Enums\ProjectTaskSource::Redmine,
+            'external_key' => '4242',
+            'title' => 'Тестовая задача #4242',
+            'status' => \App\Enums\ProjectTaskStatus::Open,
+            'last_message_at' => now(),
+        ]);
+
+        $this->screen('platform.tasks')
+            ->actingAs($admin)
+            ->display()
+            ->assertOk()
+            ->assertSee('Задачи')
+            ->assertSee('Тестовая задача #4242')
+            ->assertSee('Task Project');
+
+        $this->screen('platform.tasks.view', ['task' => $task->id])
+            ->actingAs($admin)
+            ->display()
+            ->assertOk()
+            ->assertSee('#4242')
+            ->assertSee('Письма задачи');
+    }
+
+    #[Test]
     public function admin_can_open_manager_actions_and_approve(): void
     {
         $admin = $this->makeAdmin();
@@ -99,6 +132,54 @@ class OrchidAdminScreensTest extends TestCase
 
         $this->assertSame(ManagerActionStatus::Approved, $action->fresh()->status);
         $this->assertSame('Final reply text', $action->fresh()->final_reply);
+    }
+
+    #[Test]
+    public function manager_action_view_shows_task_link_when_message_has_project_task(): void
+    {
+        $admin = $this->makeAdmin();
+        $project = Project::factory()->create(['status' => ProjectStatus::Active]);
+        $task = ProjectTask::query()->create([
+            'project_id' => $project->id,
+            'source' => \App\Enums\ProjectTaskSource::Redmine,
+            'external_key' => '99533',
+            'title' => 'ЛК Брокера | Временное решение',
+            'status' => \App\Enums\ProjectTaskStatus::Open,
+        ]);
+        $message = Message::factory()->create([
+            'project_id' => $project->id,
+            'project_task_id' => $task->id,
+            'processing_status' => MessageProcessingStatus::Applied,
+            'classification' => MessageClassification::Client,
+            'requires_manager' => true,
+            'subject' => 'Redmine update',
+        ]);
+        $event = Event::query()->create([
+            'message_id' => $message->id,
+            'project_id' => $project->id,
+            'type' => EventType::TaskUpdated,
+            'summary' => 'Владимир Андреев сообщил о заливке на дев и стейдж.',
+            'confidence' => 0.9,
+            'payload' => [],
+            'applied_at' => now(),
+        ]);
+        $action = ManagerAction::query()->create([
+            'project_id' => $project->id,
+            'event_id' => $event->id,
+            'message_id' => $message->id,
+            'action_type' => ManagerActionType::Review,
+            'status' => ManagerActionStatus::Pending,
+            'reason' => 'Обратная связь',
+            'draft_reply' => null,
+        ]);
+
+        $this->screen('platform.manager-actions.view', ['manager_action' => $action])
+            ->actingAs($admin)
+            ->display()
+            ->assertOk()
+            ->assertSee('Задача')
+            ->assertSee('#99533')
+            ->assertSee(route('platform.tasks.view', $task), false);
     }
 
     #[Test]
@@ -276,7 +357,17 @@ class OrchidAdminScreensTest extends TestCase
             ->display()
             ->assertOk()
             ->assertSee('ООО Экран')
-            ->assertSee('Тестов Контакт');
+            ->assertSee('Тестов Контакт')
+            ->assertSee('Добавить контакт');
+
+        $this->screen('platform.projects.edit', ['project' => $project])
+            ->actingAs($admin)
+            ->display()
+            ->assertOk()
+            ->assertSee('Добавить клиента')
+            ->assertSee('Добавить исполнителя')
+            ->assertSee('Все задачи')
+            ->assertSee('Все входящие');
 
         $this->screen('platform.client-companies.create')
             ->actingAs($admin)
@@ -351,11 +442,21 @@ class OrchidAdminScreensTest extends TestCase
     public function admin_can_open_message_view_with_journal(): void
     {
         $admin = $this->makeAdmin();
+        $project = Project::factory()->create(['status' => ProjectStatus::Active]);
+        $task = ProjectTask::query()->create([
+            'project_id' => $project->id,
+            'source' => \App\Enums\ProjectTaskSource::Redmine,
+            'external_key' => '99522',
+            'title' => 'СЕО - внедрение OG-разметки для блога на новом сайте',
+            'status' => \App\Enums\ProjectTaskStatus::Open,
+        ]);
         $message = Message::factory()->create([
             'subject' => 'View journal mail',
             'classification' => MessageClassification::Client,
             'processing_status' => MessageProcessingStatus::Classified,
             'requires_manager' => true,
+            'project_id' => $project->id,
+            'project_task_id' => $task->id,
         ]);
 
         $this->screen('platform.messages.view', ['message' => $message])
@@ -368,6 +469,8 @@ class OrchidAdminScreensTest extends TestCase
             ->assertSee('Тема')
             ->assertSee('Классификация')
             ->assertSee('Проект')
+            ->assertSee('#99522')
+            ->assertSee(route('platform.tasks.view', $task), false)
             ->assertSee('Изменить')
             ->assertDontSee('Ручная корректировка')
             ->assertDontSee('Роль отправителя');

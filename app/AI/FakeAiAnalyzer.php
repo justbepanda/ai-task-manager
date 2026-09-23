@@ -111,6 +111,11 @@ class FakeAiAnalyzer implements AiAnalyzer
         ];
     }
 
+    public function lastModel(): ?string
+    {
+        return 'fake';
+    }
+
     /**
      * @return array<string, mixed>
      */

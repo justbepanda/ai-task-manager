@@ -16,6 +16,9 @@ use App\Models\MailSyncState;
 use App\Models\Message;
 use App\Models\MessageRaw;
 use App\Models\ProcessingLog;
+use App\Models\ProjectTask;
+use App\Enums\ProjectTaskSource;
+use App\Enums\ProjectTaskStatus;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -269,6 +272,106 @@ class MailSyncTest extends TestCase
         ));
 
         $this->assertSame($root['message']->conversation_id, $reply['message']->conversation_id);
+    }
+
+    public function test_empty_imap_message_is_skipped_not_persisted(): void
+    {
+        Queue::fake();
+
+        $empty = new NormalizedIncomingMessage(
+            source: MailSource::Yandex,
+            externalId: 'broken-folder:0:5',
+            sender: '',
+            recipients: [],
+            cc: [],
+            subject: null,
+            body: null,
+            receivedAt: Carbon::now(),
+            headers: [],
+            metadata: [
+                'imap_uid' => 5,
+                'folder' => 'INBOX',
+                'uidvalidity' => 0,
+            ],
+            rawHeaders: '',
+            rawBody: '',
+        );
+
+        $fake = new FakeMailProvider([$empty, $this->sampleMessage('ok@example.com', 6)]);
+        $this->app->instance(MailProvider::class, $fake);
+
+        $result = app(SyncMailService::class)->sync(MailSource::Yandex);
+
+        $this->assertSame(1, $result['imported']);
+        $this->assertSame(1, $result['skipped']);
+        $this->assertDatabaseCount('messages', 1);
+        $this->assertDatabaseHas('messages', ['external_id' => 'ok@example.com']);
+        $this->assertDatabaseHas('mail_sync_states', [
+            'folder' => 'INBOX',
+            'last_uid' => 6,
+        ]);
+    }
+
+    public function test_persist_rejects_empty_message(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        app(PersistIncomingMessage::class)->handle(new NormalizedIncomingMessage(
+            source: MailSource::Yandex,
+            externalId: 'empty:0:1',
+            sender: '',
+            recipients: [],
+            cc: [],
+            subject: null,
+            body: '',
+            receivedAt: Carbon::now(),
+            metadata: ['imap_uid' => 1, 'folder' => 'X', 'uidvalidity' => 0],
+            rawHeaders: '',
+            rawBody: '',
+        ));
+    }
+
+    public function test_purge_empty_messages_command_deletes_blanks_and_resets_folder_cursor(): void
+    {
+        $folder = '&BBMEOAQzBDAEPwQ7BDAEPQ-, &BD8EOARBBEwEPAQw-';
+
+        MailSyncState::query()->create([
+            'provider' => MailSource::Yandex->value,
+            'folder' => $folder,
+            'last_uid' => 99,
+            'uidvalidity' => 0,
+        ]);
+
+        Message::factory()->create([
+            'sender' => '',
+            'subject' => null,
+            'body' => null,
+            'metadata' => ['folder' => $folder, 'imap_uid' => 3, 'uidvalidity' => 0],
+        ]);
+        Message::factory()->create([
+            'sender' => 'real@example.com',
+            'subject' => 'OK',
+            'body' => 'body',
+        ]);
+
+        ProjectTask::query()->create([
+            'project_id' => null,
+            'source' => ProjectTaskSource::EmailThread,
+            'external_key' => 'orphan-thread:0:1',
+            'title' => 'Переписка #999',
+            'status' => ProjectTaskStatus::Open,
+        ]);
+
+        $this->artisan('messages:purge-empty')
+            ->assertSuccessful();
+
+        $this->assertDatabaseCount('messages', 1);
+        $this->assertDatabaseHas('messages', ['subject' => 'OK']);
+        $this->assertDatabaseMissing('project_tasks', ['external_key' => 'orphan-thread:0:1']);
+        $this->assertDatabaseHas('mail_sync_states', [
+            'folder' => $folder,
+            'last_uid' => 0,
+        ]);
     }
 
     private function sampleMessage(string $externalId, int $uid, array $extraHeaders = [], string $folder = 'INBOX'): NormalizedIncomingMessage

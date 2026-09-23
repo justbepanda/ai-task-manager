@@ -83,8 +83,9 @@ Make-команды (как rbi + полезные для MVP):
 | `projects` | id, name, description, status, timestamps |
 | `project_instructions` | Свободный текст инструкций для AI (отдельно от system prompt) |
 | `project_matching_rules` | Детерминированные правила: emails, domains, subject patterns, technical sources, keywords (JSON columns / typed rows) |
-| `conversations` | Логическая переписка внутри проекта |
-| `messages` | Нормализованное входящее сообщение (`source`, `external_id` unique, sender/`sender_role`, recipients/cc, subject, body, received_at, headers/metadata, classification, processing_status, project_id nullable, conversation_id) |
+| `conversations` | Логическая переписка + `agent_state` (сжатая память для Hermes) |
+| `project_tasks` | Задачи проекта: Redmine/Jira key или email_thread; `messages.project_task_id` |
+| `messages` | Нормализованное входящее сообщение (`source`, `external_id` unique, sender/`sender_role`, recipients/cc, subject, body, received_at, headers/metadata, classification, processing_status, project_id nullable, project_task_id, conversation_id, `ai_summary`, `agent_facts`) |
 | `mail_filter_settings` | Singleton (id=1): глобальный чёрный список → classification=`ignored` |
 | `message_raws` (опц.) | Сырые IMAP-данные / headers blob |
 | `events` | Результат понимания: event_type, summary, confidence, message_id, project_id, payload |
@@ -123,6 +124,7 @@ App\Hermes\Contracts\LlmProvider
 App\AI\Contracts\AiAnalyzer                      # deprecated alias of LlmProvider
 
 App\AI\Services\BuildMessageContext
+App\Domain\Conversations\UpdateConversationAgentMemory  # message.agent_facts + conversation.agent_state after Hermes
 App\AI\Services\AnalysisResultValidator
 App\AI\Services\AnalyzeMessage                   # Hermes propose → validate → Event
 
@@ -225,7 +227,7 @@ Enums, migrations/models (projects, instructions, matching rules, conversations,
 
 ### Phase 2 — DONE (кратко)
 
-Native PHP IMAP (`YandexMailProvider` + `ImapMailbox` / `ImapMessageMapper`), idempotent `PersistIncomingMessage` (`source`+`external_id`), `mail_sync_states` cursor **per folder** (`provider`+`folder`; first run: newest 100 per folder), `listSyncFolders()` syncs all IMAP folders by default (user labels + Trash/Корзина; exclude spam/drafts/sent via `YANDEX_IMAP_FOLDER_EXCLUDE`), `SyncMailService` → `SyncYandexMailJob` / `mail:sync`, schedule via `config('mail_providers.sync_interval_minutes')`, stub `ClassifyMessageJob`, `FakeMailProvider` + feature/unit tests. No webklex.
+Native PHP IMAP (`YandexMailProvider` + `ImapMailbox` / `ImapMessageMapper`), idempotent `PersistIncomingMessage` (`source`+`external_id`), `mail_sync_states` cursor **per folder** (`provider`+`folder`; first run: newest 100 per folder), `listSyncFolders()` syncs all IMAP folders by default (user labels + Trash/Корзина; exclude spam/drafts/sent via `YANDEX_IMAP_FOLDER_EXCLUDE` with proper UTF7-IMAP→UTF-8 decode), mailbox names with comma/space are quoted on open, empty IMAP fetches are skipped (`SyncMailService`) / purged (`messages:purge-empty`), `SyncMailService` → `SyncYandexMailJob` / `mail:sync`, schedule via `config('mail_providers.sync_interval_minutes')`, stub `ClassifyMessageJob`, `FakeMailProvider` + feature/unit tests. No webklex.
 
 ### Phase 3 — DONE (кратко)
 
@@ -233,7 +235,7 @@ Rules-first `MessageClassifier` + `ProjectMatcher` + orchestrator `ClassifyAndMa
 
 ### Phase 4 — DONE (кратко)
 
-`AiAnalyzer` (Gemini HTTP + `FakeAiAnalyzer`), `BuildMessageContext`, `AnalysisResultValidator`, orchestrator `AnalyzeMessage` → persist `Event` + message `ai_*` / `analyzed`, `ProcessingLog` `ai_analyzed`, stub `ApplyEventJob`. AI never mutates Project state or sends mail. PHPUnit with Fake only (no live Gemini).
+`AiAnalyzer` (Gemini HTTP + `FakeAiAnalyzer`), `BuildMessageContext`, `AnalysisResultValidator`, orchestrator `AnalyzeMessage` → persist `Event` + message `ai_*` / `agent_facts` / `analyzed`, `UpdateConversationAgentMemory` → `conversations.agent_state`, `ProcessingLog` `ai_analyzed`, stub `ApplyEventJob`. AI never mutates Project state or sends mail. PHPUnit with Fake only (no live Gemini).
 
 ### Phase 5 — DONE (кратко)
 

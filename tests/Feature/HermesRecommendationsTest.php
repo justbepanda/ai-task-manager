@@ -87,6 +87,53 @@ class HermesRecommendationsTest extends TestCase
         $this->assertSame('technical_summary', $context->analysisMode);
     }
 
+    public function test_build_message_context_includes_conversation_agent_state(): void
+    {
+        $project = Project::factory()->create(['status' => ProjectStatus::Active]);
+        $conversation = \App\Models\Conversation::query()->create([
+            'project_id' => $project->id,
+            'subject' => 'Thread',
+            'agent_state' => [
+                'topic' => 'Метрики сайта',
+                'status' => 'waiting_us',
+                'open_questions' => ['Куда переносить счётчики?'],
+            ],
+        ]);
+
+        $prior = Message::factory()->create([
+            'project_id' => $project->id,
+            'conversation_id' => $conversation->id,
+            'classification' => MessageClassification::Client,
+            'subject' => 'Earlier',
+            'body' => 'Длинное старое тело про метрики и оверлей',
+            'ai_summary' => 'Обсуждение метрик',
+            'agent_facts' => [
+                'summary' => 'Обсуждение метрик',
+                'topic' => 'Метрики',
+                'open_questions' => ['Перенос в body?'],
+                'key_points' => ['Метрики нужны'],
+            ],
+            'received_at' => now()->subDays(2),
+        ]);
+
+        $current = Message::factory()->create([
+            'project_id' => $project->id,
+            'conversation_id' => $conversation->id,
+            'classification' => MessageClassification::Client,
+            'subject' => 'Now',
+            'body' => 'Ок, давайте',
+            'received_at' => now()->subDay(),
+        ]);
+
+        $context = app(BuildMessageContext::class)->handle($current);
+
+        $this->assertSame('Метрики сайта', $context->conversationAgentState['topic'] ?? null);
+        $this->assertCount(1, $context->conversationMessages);
+        $this->assertSame($prior->id, $context->conversationMessages[0]['id']);
+        $this->assertSame('Обсуждение метрик', $context->conversationMessages[0]['ai_summary'] ?? null);
+        $this->assertIsArray($context->conversationMessages[0]['agent_facts'] ?? null);
+    }
+
     public function test_build_message_context_excludes_later_conversation_messages(): void
     {
         $project = Project::factory()->create(['status' => ProjectStatus::Active]);

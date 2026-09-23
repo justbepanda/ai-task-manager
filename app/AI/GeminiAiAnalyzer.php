@@ -16,6 +16,16 @@ class GeminiAiAnalyzer implements AiAnalyzer
     /** @var list<int> */
     private const RETRYABLE_STATUSES = [408, 429, 500, 502, 503, 504];
 
+    private ?string $lastModel = null;
+
+    /**
+     * Model that produced the last successful response (or last attempted on failure).
+     */
+    public function lastModel(): ?string
+    {
+        return $this->lastModel;
+    }
+
     /**
      * @return array<string, mixed>
      */
@@ -45,9 +55,12 @@ class GeminiAiAnalyzer implements AiAnalyzer
         $models = $this->modelCandidates();
         $lastStatus = null;
         $lastException = null;
+        $this->lastModel = null;
 
         foreach ($models as $modelIndex => $model) {
+            $this->lastModel = $model;
             $url = "{$baseUrl}/models/{$model}:generateContent";
+            $hasFallback = $modelIndex < count($models) - 1;
 
             for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
                 try {
@@ -70,7 +83,7 @@ class GeminiAiAnalyzer implements AiAnalyzer
                         continue;
                     }
 
-                    if ($modelIndex < count($models) - 1) {
+                    if ($hasFallback) {
                         continue 2;
                     }
 
@@ -94,6 +107,21 @@ class GeminiAiAnalyzer implements AiAnalyzer
                     'attempt' => $attempt,
                 ]);
 
+                // Rate limit: switch to fallback immediately (retries won't clear quota).
+                if ($lastStatus === 429 && $hasFallback) {
+                    Log::info('Gemini rate limited; switching to fallback model', [
+                        'from' => $model,
+                        'to' => $models[$modelIndex + 1],
+                    ]);
+
+                    continue 2;
+                }
+
+                // Unknown/retired model id — try next candidate.
+                if ($lastStatus === 404 && $hasFallback) {
+                    continue 2;
+                }
+
                 $retryable = in_array($lastStatus, self::RETRYABLE_STATUSES, true);
                 if ($retryable && $attempt < $maxAttempts) {
                     $this->sleepBeforeRetry($baseDelayMs, $attempt);
@@ -101,20 +129,19 @@ class GeminiAiAnalyzer implements AiAnalyzer
                     continue;
                 }
 
-                if ($retryable && $modelIndex < count($models) - 1) {
-                    // Try next fallback model.
+                if ($retryable && $hasFallback) {
                     continue 2;
                 }
 
                 throw new AnalysisException(
-                    $this->userFacingHttpError($lastStatus),
+                    $this->userFacingHttpError($lastStatus, $models),
                     'http_error',
                 );
             }
         }
 
         throw new AnalysisException(
-            $this->userFacingHttpError($lastStatus),
+            $this->userFacingHttpError($lastStatus, $models),
             'http_error',
             $lastException,
         );
@@ -205,10 +232,18 @@ class GeminiAiAnalyzer implements AiAnalyzer
         usleep(($delayMs + $jitterMs) * 1000);
     }
 
-    private function userFacingHttpError(?int $status): string
+    private function userFacingHttpError(?int $status, array $models = []): string
     {
+        $modelsHint = $models !== []
+            ? ' Пробовали: '.implode(', ', $models).'.'
+            : '';
+
         if ($status === 429) {
-            return 'Gemini перегружен (лимит запросов). Подождите минуту и нажмите «Запросить» снова.';
+            return 'Gemini перегружен (лимит запросов).'.$modelsHint.' Подождите минуту и нажмите «Запросить» снова.';
+        }
+
+        if ($status === 404) {
+            return 'Gemini: модель недоступна (HTTP 404). Проверьте GEMINI_MODEL / GEMINI_FALLBACK_MODELS.';
         }
 
         if ($status !== null && $status >= 500) {
@@ -274,7 +309,11 @@ class GeminiAiAnalyzer implements AiAnalyzer
         $modeRule = '';
         if ($context->analysisMode === 'technical_summary') {
             $modeRule = "\n- Режим technical_summary: это техническое уведомление (часто Redmine/Jira). "
-                .'Дай короткий summary, event_type обычно technical_notification или task_updated/task_created. '
+                .'event_type обычно technical_notification или task_updated/task_created. '
+                .'summary — ОЧЕНЬ коротко: кто + суть изменения (1 предложение, до ~120 символов). '
+                .'Не пиши «Задача обновлена…», номер тикета, полное название и смену статуса — они уже в теме/карточке. '
+                .'Плохо: «Задача обновлена: Владимир Андреев обновил задачу Redmine #99533 «ЛК Брокера…», переведя ее в статус «Обратная связь», и сообщил о заливке на дев и стейдж.» '
+                .'Хорошо: «Владимир Андреев сообщил о заливке на дев и стейдж.» '
                 .'suggested_action обычно no_action, draft_reply=null, requires_manager=false — '
                 .'кроме: (1) в теме есть «(Обратная связь)» → requires_manager=true, suggested_action=review; '
                 .'(2) явная критичность (падение, блокер) → review.';
@@ -286,7 +325,7 @@ class GeminiAiAnalyzer implements AiAnalyzer
                 .'не повторяй типичные ошибки (проект, классификация, тон draft).';
         }
 
-        return <<<PROMPT
+        $prompt = <<<PROMPT
 Ты — помощник менеджера проектов. Анализируй входящие письма и возвращай ТОЛЬКО валидный JSON без markdown.
 
 Схема ответа:
@@ -299,7 +338,15 @@ class GeminiAiAnalyzer implements AiAnalyzer
   "requires_manager": boolean,
   "suggested_action": "no_action|review|reply|follow_up",
   "draft_reply": string or null (обязателен если suggested_action=reply),
-  "reason": string or null
+  "reason": string or null,
+  "agent_facts": object or null — опционально для памяти диалога:
+    {
+      "topic": string|null,
+      "open_questions": string[],
+      "commitments": string[],
+      "waiting_for": string|null,
+      "key_points": string[]
+    }
 }
 
 Правила:
@@ -308,15 +355,20 @@ class GeminiAiAnalyzer implements AiAnalyzer
 - Если у письма нет project_id, но есть кандидаты — выбери наиболее вероятный или null при сомнении.
 - Не предлагай отправку писем самостоятельно; только draft при необходимости.
 - classification — рекомендация.
-- message.body — это ТОЛЬКО последний ответ в письме (без цитат). summary, reason, suggested_action и draft_reply обязаны относиться к нему.
-- message.id — текущее письмо. Не описывай другие письма из conversation_messages / recent_events как текущее событие.
-- conversation_messages — только более ранние письма диалога (фон). Если в них другой смысл — игнорируй для summary/reason.
-- message.thread_excerpt — цитата внутри текущего письма; не подменяй ею смысл message.body.
-- Если message.body короткий (слот времени, «ок», «спасибо») — event/reason/draft только про него, без тем из старой переписки.
-- Не добавляй в summary/reason конкретные темы (ВМ, перенос сервера, бюджетные цифры, имена фич), которых нет в message.body — даже если они есть в conversation_messages или recent_events.
+- summary: одно короткое предложение о сути (кто + что произошло). Без преамбулы «Задача обновлена» / «Клиент написал», без полного названия тикета и номера Redmine/Jira, если они уже в теме. Цель — быстро прочитать в списке событий.
+- message.body — последний ответ в текущем письме (без цитат). suggested_action и «что произошло сейчас» опирайся на него.
+- message.id — текущее письмо. Не подменяй его другим письмом из conversation_messages / recent_events (особенно более поздним — их в контексте нет).
+- conversation_agent_state — сжатая память диалога (тема, open_questions, waiting_for). Используй как основной фон проблемы.
+- conversation_messages — более ранние письма; у них часто уже есть ai_summary / agent_facts — предпочитай их полному body.
+- Правило баланса: (1) событие = реакция на message.body; (2) описание проблемы дополняй из conversation_agent_state и истории; (3) не приписывай клиенту новый запрос, которого нет ни в message.body, ни в явной отсылке к истории.
+- message.thread_excerpt — обрезанная цитата внутри текущего письма; фон, не отдельное событие.
+- Не выдумывай факты (цифры, сроки, ВМ, перенос), которых нет ни в message.body, ни в conversation_agent_state / conversation_messages / thread_excerpt.
+- agent_facts заполняй по возможности: короткие факты для следующих писем (open_questions, waiting_for, commitments).
 - Если клиент обещает прислать правки/комментарии/материалы к сроку («в выходные напишу») — requires_manager=true, suggested_action=follow_up или review (не information_only / no_action).
 - Пиши summary и draft_reply на языке переписки (обычно русский).{$redmineRule}{$modeRule}{$correctionsRule}
 PROMPT;
+
+        return $prompt.\App\Support\MailRoutingGuidance::hermesClassificationBlock();
     }
 
     private function userPrompt(MessageContext $context): string

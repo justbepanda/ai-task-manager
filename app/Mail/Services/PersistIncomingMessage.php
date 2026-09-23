@@ -29,6 +29,12 @@ class PersistIncomingMessage
      */
     public function handle(NormalizedIncomingMessage $incoming): array
     {
+        if ($incoming->isEmpty()) {
+            throw new \InvalidArgumentException(
+                'Refusing to persist empty IMAP message '.$incoming->externalId
+            );
+        }
+
         $existing = Message::query()
             ->where('source', $incoming->source)
             ->where('external_id', $incoming->externalId)

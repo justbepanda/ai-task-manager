@@ -52,6 +52,9 @@ class AnalyzeMessageTest extends TestCase
         $this->assertNotNull($message->ai_summary);
         $this->assertNotNull($message->ai_confidence);
         $this->assertTrue($message->requires_manager);
+        $this->assertIsArray($message->agent_facts);
+        $this->assertSame($message->ai_summary, $message->agent_facts['summary'] ?? null);
+        $this->assertSame('waiting_us', $message->conversation?->fresh()->agent_state['status'] ?? null);
 
         $event = Event::query()->where('message_id', $message->id)->first();
         $this->assertNotNull($event);

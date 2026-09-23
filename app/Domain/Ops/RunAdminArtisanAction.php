@@ -41,6 +41,20 @@ class RunAdminArtisanAction
             $exitCode = 1;
         }
 
+        // After wiping the DB, Redis still holds old job payloads (ClassifyMessageJob for deleted IDs).
+        // Clear the default queue so the next mail:sync starts clean.
+        if ($actionId === 'db_fresh_seed' && $ok) {
+            try {
+                Artisan::call('queue:clear', ['connection' => 'redis', '--queue' => 'default'], $output);
+                $cleared = trim($output->fetch());
+                if ($cleared !== '') {
+                    $text = trim($text."\n".$cleared);
+                }
+            } catch (Throwable $e) {
+                $text = trim($text."\nqueue:clear failed: ".$e->getMessage());
+            }
+        }
+
         $summary = sprintf(
             '%s (%s): %s',
             $action['title'],

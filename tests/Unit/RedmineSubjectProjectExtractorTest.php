@@ -86,20 +86,15 @@ class RedmineSubjectProjectExtractorTest extends TestCase
         );
     }
 
-    public function test_preferred_project_name_uses_first_alias(): void
+    public function test_matches_latin_project_to_cyrillic_redmine_subject(): void
     {
-        $this->assertSame(
-            'Tekta',
-            $this->extractor->preferredProjectName(
-                '[Tekta, Текта, ЛК клиента и брокера, поддержка - Bug #1] X',
-            ),
+        $candidates = $this->extractor->extractNameCandidates(
+            '[Гигаплан - New #98382] (В работе) GigaPlan | Бэкенд',
         );
 
         $this->assertSame(
-            'RBI сайт 2025',
-            $this->extractor->preferredProjectName(
-                '[RBI сайт 2025 - New #99143] (Обратная связь)',
-            ),
+            'Гигаплан',
+            $this->extractor->matchProjectName('GigaPlan', $candidates),
         );
     }
 }

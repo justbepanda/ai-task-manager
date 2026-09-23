@@ -20,7 +20,9 @@ class MessageListLayout extends Table
                 ->width('70')
                 ->cantHide()
                 ->style('vertical-align: top')
-                ->render(fn (Message $message) => e((string) $message->id)),
+                ->render(fn (Message $message) => '<a href="'.e(route('platform.messages.view', $message)).'">'
+                    .e((string) $message->id)
+                    .'</a>'),
             TD::make('sender', 'Отправитель')
                 ->width('240')
                 ->style('vertical-align: top')
@@ -58,28 +60,68 @@ HTML;
 
     private function metaTags(Message $message): string
     {
-        $items = [
-            'Классификация' => $message->classification?->label() ?? '—',
-            'Проект' => $message->project?->name ?? '—',
-            'Событие' => $message->events->first()?->type->label() ?? '—',
-            'Менеджер' => $message->requires_manager === null
-                ? '—'
-                : ($message->requires_manager ? 'да' : 'нет'),
-            'Статус' => $message->processing_status->label(),
-            'Уверенность' => $message->ai_confidence !== null
-                ? (string) $message->ai_confidence
-                : '—',
-        ];
-
         $tags = [];
-        foreach ($items as $label => $value) {
-            $tags[] = sprintf(
-                '<span title="%1$s" style="display:inline-block;background:#eef1f4;color:#495057;border-radius:999px;padding:0.15rem 0.65rem;font-size:0.78rem;line-height:1.4;white-space:nowrap;">%1$s: %2$s</span>',
-                e($label),
-                e($value),
+
+        $tags[] = $this->metaPill('Классификация', $message->classification?->label() ?? '—');
+
+        if ($message->project !== null) {
+            $tags[] = $this->metaPill(
+                'Проект',
+                $message->project->name,
+                route('platform.projects.edit', $message->project),
             );
+        } else {
+            $tags[] = $this->metaPill('Проект', '—');
         }
 
+        if ($message->projectTask !== null) {
+            $tags[] = $this->metaPill(
+                'Задача',
+                $message->projectTask->displayLabel(),
+                route('platform.tasks.view', $message->projectTask),
+            );
+        } else {
+            $tags[] = $this->metaPill('Задача', '—');
+        }
+
+        $tags[] = $this->metaPill(
+            'Событие',
+            $message->events->first()?->type->label() ?? '—',
+            $message->events->isNotEmpty()
+                ? route('platform.messages.view', $message)
+                : null,
+        );
+        $tags[] = $this->metaPill(
+            'Менеджер',
+            $message->requires_manager === null
+                ? '—'
+                : ($message->requires_manager ? 'да' : 'нет'),
+        );
+        $tags[] = $this->metaPill('Статус', $message->processing_status->label());
+        $tags[] = $this->metaPill(
+            'Уверенность',
+            $message->ai_confidence !== null
+                ? (string) $message->ai_confidence
+                : '—',
+        );
+
         return implode('', $tags);
+    }
+
+    private function metaPill(string $label, string $value, ?string $url = null): string
+    {
+        $inner = e($label).': '.e($value);
+        if ($url !== null && $url !== '') {
+            $inner = e($label).': <a class="inbox-meta-link" href="'.e($url)
+                .'" style="color:inherit!important;text-decoration:none!important;border-bottom:0!important;">'
+                .e($value)
+                .'</a>';
+        }
+
+        return sprintf(
+            '<span title="%1$s" style="display:inline-block;background:#eef1f4;color:#495057;border-radius:999px;padding:0.15rem 0.65rem;font-size:0.78rem;line-height:1.4;white-space:nowrap;">%2$s</span>',
+            e($label),
+            $inner,
+        );
     }
 }

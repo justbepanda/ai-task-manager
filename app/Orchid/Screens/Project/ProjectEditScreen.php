@@ -12,6 +12,7 @@ use App\Models\Event;
 use App\Models\Executor;
 use App\Models\Message;
 use App\Models\Project;
+use App\Models\ProjectTask;
 use App\Orchid\Layouts\Project\ProjectEditLayout;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -22,6 +23,7 @@ use Orchid\Screen\TD;
 use Orchid\Support\Color;
 use Orchid\Support\Facades\Layout;
 use Orchid\Support\Facades\Toast;
+use Illuminate\Support\Str;
 
 class ProjectEditScreen extends Screen
 {
@@ -55,6 +57,15 @@ class ProjectEditScreen extends Screen
             'executors' => $project->exists ? $project->executors : collect(),
             'messages' => $project->exists
                 ? Message::query()->where('project_id', $project->id)->latest('received_at')->limit(20)->get()
+                : collect(),
+            'tasks' => $project->exists
+                ? ProjectTask::query()
+                    ->where('project_id', $project->id)
+                    ->withCount('messages')
+                    ->orderByDesc('last_message_at')
+                    ->orderByDesc('id')
+                    ->limit(50)
+                    ->get()
                 : collect(),
             'events' => $project->exists
                 ? Event::query()->where('project_id', $project->id)->latest()->limit(20)->get()
@@ -93,52 +104,176 @@ class ProjectEditScreen extends Screen
 
     public function layout(): iterable
     {
+        $projectExists = (bool) $this->project?->exists;
+        $projectId = $this->project?->id;
+        $firstCompany = $projectExists
+            ? $this->project->clientCompanies->first()
+            : null;
+
         return [
             Layout::block(ProjectEditLayout::class)
                 ->title('Основные данные и правила')
                 ->description('Инструкция AI и детерминированные правила хранятся отдельно.')
                 ->vertical(),
 
-            Layout::table('clientCompanies', [
-                TD::make('name', 'Клиент')
-                    ->render(fn (ClientCompany $company) => Link::make($company->name)
-                        ->route('platform.client-companies.edit', $company)),
-            ])->title('Клиенты'),
+            Layout::block([
+                Layout::table('clientCompanies', [
+                    TD::make('name', 'Клиент')
+                        ->render(fn (ClientCompany $company) => Link::make($company->name)
+                            ->route('platform.client-companies.edit', $company)),
+                ]),
+            ])
+                ->title('Клиенты')
+                ->description('Компании-клиенты, связанные с проектом.')
+                ->vertical()
+                ->commands([
+                    Link::make('Добавить клиента')
+                        ->icon('bs.plus-circle')
+                        ->href($projectExists
+                            ? route('platform.client-companies.create', ['project_id' => $projectId])
+                            : route('platform.client-companies.create'))
+                        ->canSee($projectExists),
+                ]),
 
-            Layout::table('clientContacts', [
-                TD::make('full_name', 'Контакт')
-                    ->render(fn (ClientContact $contact) => Link::make($contact->fullName())
-                        ->route('platform.client-contacts.edit', $contact)),
-                TD::make('company', 'Клиент')
-                    ->render(fn (ClientContact $contact) => e($contact->clientCompany?->name ?? '—')),
-                TD::make('position', 'Должность'),
-            ])->title('Контакты'),
+            Layout::block([
+                Layout::table('clientContacts', [
+                    TD::make('full_name', 'Контакт')
+                        ->render(fn (ClientContact $contact) => Link::make($contact->fullName())
+                            ->route('platform.client-contacts.edit', $contact)),
+                    TD::make('company', 'Клиент')
+                        ->render(fn (ClientContact $contact) => e($contact->clientCompany?->name ?? '—')),
+                    TD::make('position', 'Должность'),
+                ]),
+            ])
+                ->title('Контакты')
+                ->description($firstCompany === null
+                    ? 'Сначала добавьте клиента проекта — затем можно создать контакт.'
+                    : 'Контакты компаний, привязанные к проекту.')
+                ->vertical()
+                ->commands(array_values(array_filter([
+                    $firstCompany === null
+                        ? Link::make('Добавить клиента')
+                            ->icon('bs.plus-circle')
+                            ->href(route('platform.client-companies.create', ['project_id' => $projectId]))
+                            ->canSee($projectExists)
+                        : Link::make('Добавить контакт')
+                            ->icon('bs.person-plus')
+                            ->href(route('platform.client-contacts.create', [
+                                'company' => $firstCompany,
+                                'project_id' => $projectId,
+                            ]))
+                            ->canSee($projectExists),
+                ]))),
 
-            Layout::table('executors', [
-                TD::make('full_name', 'Исполнитель')
-                    ->render(fn (Executor $executor) => Link::make($executor->fullName())
-                        ->route('platform.executors.edit', $executor)),
-                TD::make('position', 'Должность'),
-                TD::make('is_active', 'Активен')
-                    ->render(fn (Executor $executor) => $executor->is_active ? 'Да' : 'Нет'),
-            ])->title('Исполнители'),
+            Layout::block([
+                Layout::table('executors', [
+                    TD::make('full_name', 'Исполнитель')
+                        ->render(fn (Executor $executor) => Link::make($executor->fullName())
+                            ->route('platform.executors.edit', $executor)),
+                    TD::make('position', 'Должность'),
+                    TD::make('is_active', 'Активен')
+                        ->render(fn (Executor $executor) => $executor->is_active ? 'Да' : 'Нет'),
+                ]),
+            ])
+                ->title('Исполнители')
+                ->description('Сотрудники нашей компании на проекте.')
+                ->vertical()
+                ->commands([
+                    Link::make('Добавить исполнителя')
+                        ->icon('bs.plus-circle')
+                        ->href($projectExists
+                            ? route('platform.executors.create', ['project_id' => $projectId])
+                            : route('platform.executors.create'))
+                        ->canSee($projectExists),
+                ]),
 
-            Layout::table('messages', [
-                TD::make('id', 'ID')->width('70'),
-                TD::make('sender', 'Отправитель'),
-                TD::make('subject', 'Тема'),
-                TD::make('classification', 'Классификация')
-                    ->render(fn (Message $m) => e($m->classification?->label() ?? '—')),
-                TD::make('open', '')
-                    ->render(fn (Message $m) => Link::make('Открыть')->route('platform.messages.view', $m)),
-            ])->title('Связанные сообщения'),
+            Layout::block([
+                Layout::table('tasks', [
+                    TD::make('external_key', 'Ключ')
+                        ->render(fn (ProjectTask $task) => e($task->source->label().': '.$task->external_key)),
+                    TD::make('title', 'Задача')
+                        ->render(fn (ProjectTask $task) => Link::make(Str::limit((string) ($task->title ?: $task->displayLabel()), 80))
+                            ->route('platform.tasks.view', $task)),
+                    TD::make('status', 'Статус')
+                        ->render(fn (ProjectTask $task) => e($task->status->label())),
+                    TD::make('messages_count', 'Писем')
+                        ->render(fn (ProjectTask $task) => e((string) ($task->messages_count ?? 0))),
+                    TD::make('last_message_at', 'Последнее')
+                        ->render(fn (ProjectTask $task) => e($task->last_message_at?->format('d.m.Y H:i') ?? '—')),
+                    TD::make('open', '')
+                        ->render(fn (ProjectTask $task) => Link::make('Письма')
+                            ->route('platform.messages', ['filter' => ['project_task_id' => $task->id]])),
+                ]),
+            ])
+                ->title('Задачи проекта')
+                ->vertical()
+                ->commands([
+                    Link::make('Все задачи')
+                        ->icon('bs.list-task')
+                        ->route('platform.tasks', ['filter' => ['project_id' => $projectId]])
+                        ->canSee($projectExists),
+                ]),
 
-            Layout::table('events', [
-                TD::make('id', 'ID')->width('70'),
-                TD::make('type', 'Тип')->render(fn (Event $e) => e($e->type->label())),
-                TD::make('summary', 'Краткое описание'),
-                TD::make('confidence', 'Уверенность'),
-            ])->title('События проекта'),
+            Layout::block([
+                Layout::table('messages', [
+                    TD::make('id', 'ID')->width('70')
+                        ->render(fn (Message $m) => Link::make((string) $m->id)
+                            ->route('platform.messages.view', $m)),
+                    TD::make('sender', 'Отправитель'),
+                    TD::make('subject', 'Тема')
+                        ->render(fn (Message $m) => Link::make(Str::limit((string) ($m->subject ?: '—'), 70))
+                            ->route('platform.messages.view', $m)),
+                    TD::make('classification', 'Классификация')
+                        ->render(fn (Message $m) => e($m->classification?->label() ?? '—')),
+                    TD::make('open', '')
+                        ->render(fn (Message $m) => Link::make('Открыть')->route('platform.messages.view', $m)),
+                ]),
+            ])
+                ->title('Связанные сообщения')
+                ->vertical()
+                ->commands([
+                    Link::make('Все входящие')
+                        ->icon('bs.inbox')
+                        ->route('platform.messages', ['filter' => ['project_id' => $projectId]])
+                        ->canSee($projectExists),
+                ]),
+
+            Layout::block([
+                Layout::table('events', [
+                    TD::make('id', 'ID')->width('70')
+                        ->render(function (Event $e) {
+                            if ($e->message_id === null) {
+                                return e((string) $e->id);
+                            }
+
+                            return Link::make((string) $e->id)
+                                ->route('platform.messages.view', $e->message_id);
+                        }),
+                    TD::make('type', 'Тип')->render(function (Event $e) {
+                        $label = $e->type->label();
+                        if ($e->message_id === null) {
+                            return e($label);
+                        }
+
+                        return Link::make($label)
+                            ->route('platform.messages.view', $e->message_id);
+                    }),
+                    TD::make('summary', 'Краткое описание')
+                        ->render(function (Event $e) {
+                            $summary = Str::limit((string) ($e->summary ?: '—'), 80);
+                            if ($e->message_id === null) {
+                                return e($summary);
+                            }
+
+                            return Link::make($summary)
+                                ->route('platform.messages.view', $e->message_id);
+                        }),
+                    TD::make('confidence', 'Уверенность'),
+                ]),
+            ])
+                ->title('События проекта')
+                ->description('События создаются при обработке писем (Hermes).')
+                ->vertical(),
         ];
     }
 

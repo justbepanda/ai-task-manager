@@ -9,7 +9,7 @@ return [
         // Comma-separated fallbacks when primary returns 429/5xx after retries.
         'fallback_models' => array_values(array_filter(array_map(
             'trim',
-            explode(',', (string) env('GEMINI_FALLBACK_MODELS', 'gemini-3.5-flash-lite,gemini-2.5-flash')),
+            explode(',', (string) env('GEMINI_FALLBACK_MODELS', 'gemini-3.5-flash,gemini-3.5-flash-lite')),
         ))),
         'timeout' => (int) env('GEMINI_TIMEOUT', 60),
         'base_url' => env('GEMINI_BASE_URL', 'https://generativelanguage.googleapis.com/v1beta'),
@@ -47,5 +47,9 @@ return [
     'assign_suggest' => [
         'limit' => (int) env('AI_ASSIGN_SUGGEST_LIMIT', 40),
         'body_chars' => (int) env('AI_ASSIGN_SUGGEST_BODY_CHARS', 400),
+    ],
+
+    'people_assign' => [
+        'body_chars' => (int) env('AI_PEOPLE_ASSIGN_BODY_CHARS', 1200),
     ],
 ];

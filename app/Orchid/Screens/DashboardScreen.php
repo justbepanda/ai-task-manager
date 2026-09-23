@@ -8,17 +8,14 @@ use App\Domain\Metrics\HypothesisMetricsReport;
 use App\Enums\ManagerActionStatus;
 use App\Enums\MessageClassification;
 use App\Enums\MessageProcessingStatus;
-use App\Jobs\SyncYandexMailJob;
 use App\Models\ManagerAction;
 use App\Models\Message;
 use App\Models\Project;
-use Orchid\Screen\Actions\Button;
+use App\Orchid\Layouts\Dashboard\ClickableMetricsLayout;
 use Orchid\Screen\Actions\Link;
 use Orchid\Screen\Screen;
 use Orchid\Screen\TD;
-use Orchid\Support\Color;
 use Orchid\Support\Facades\Layout;
-use Orchid\Support\Facades\Toast;
 
 class DashboardScreen extends Screen
 {
@@ -28,24 +25,90 @@ class DashboardScreen extends Screen
 
         return [
             'metrics' => [
-                'messages_total' => ['value' => Message::query()->count()],
-                'messages_pending' => ['value' => Message::query()->where('processing_status', MessageProcessingStatus::Pending)->count()],
-                'messages_needs_manual' => ['value' => Message::query()->where('processing_status', MessageProcessingStatus::NeedsManual)->count()],
-                'messages_unknown' => ['value' => Message::query()->where('classification', MessageClassification::Unknown)->count()],
-                'messages_ignored' => ['value' => Message::query()->where('classification', MessageClassification::Ignored)->count()],
-                'events_attention' => ['value' => Message::query()->where('requires_manager', true)->count()],
-                'actions_pending' => ['value' => ManagerAction::query()->where('status', ManagerActionStatus::Pending)->count()],
-                'projects' => ['value' => Project::query()->count()],
+                'messages_total' => [
+                    'value' => Message::query()->count(),
+                    'url' => route('platform.messages'),
+                ],
+                'messages_pending' => [
+                    'value' => Message::query()->where('processing_status', MessageProcessingStatus::Pending)->count(),
+                    'url' => route('platform.messages', [
+                        'filter' => ['processing_status' => MessageProcessingStatus::Pending->value],
+                    ]),
+                ],
+                'messages_needs_manual' => [
+                    'value' => Message::query()->where('processing_status', MessageProcessingStatus::NeedsManual)->count(),
+                    'url' => route('platform.messages', [
+                        'filter' => ['processing_status' => MessageProcessingStatus::NeedsManual->value],
+                    ]),
+                ],
+                'messages_unknown' => [
+                    'value' => Message::query()->where('classification', MessageClassification::Unknown)->count(),
+                    'url' => route('platform.messages', [
+                        'filter' => ['classification' => MessageClassification::Unknown->value],
+                    ]),
+                ],
+                'messages_ignored' => [
+                    'value' => Message::query()->where('classification', MessageClassification::Ignored)->count(),
+                    'url' => route('platform.messages.ignored'),
+                ],
+                'events_attention' => [
+                    'value' => Message::query()->where('requires_manager', true)->count(),
+                    'url' => route('platform.messages', [
+                        'filter' => ['requires_manager' => '1'],
+                    ]),
+                ],
+                'actions_pending' => [
+                    'value' => ManagerAction::query()->where('status', ManagerActionStatus::Pending)->count(),
+                    'url' => route('platform.manager-actions'),
+                ],
+                'projects' => [
+                    'value' => Project::query()->count(),
+                    'url' => route('platform.projects'),
+                ],
             ],
             'hypothesis' => [
-                'mail_received' => ['value' => $hypothesis['from_events']['mail_received'] ?: $hypothesis['live']['messages_total']],
-                'client' => ['value' => $hypothesis['from_events']['mail_classified_client'] ?: $hypothesis['live']['messages_client']],
-                'technical' => ['value' => $hypothesis['from_events']['mail_classified_technical'] ?: $hypothesis['live']['messages_technical']],
-                'auto_matched' => ['value' => $hypothesis['from_events']['project_auto_matched']],
-                'draft_unchanged' => ['value' => $hypothesis['from_events']['draft_approved_unchanged']],
-                'draft_edited' => ['value' => $hypothesis['from_events']['draft_edited']],
-                'rejected' => ['value' => $hypothesis['from_events']['action_rejected']],
-                'corrections' => ['value' => $hypothesis['from_events']['analysis_corrected'] ?: $hypothesis['live']['analysis_corrections']],
+                'mail_received' => [
+                    'value' => $hypothesis['from_events']['mail_received'] ?: $hypothesis['live']['messages_total'],
+                    'url' => route('platform.metrics.hypothesis'),
+                ],
+                'client' => [
+                    'value' => $hypothesis['from_events']['mail_classified_client'] ?: $hypothesis['live']['messages_client'],
+                    'url' => route('platform.messages', [
+                        'filter' => ['classification' => MessageClassification::Client->value],
+                    ]),
+                ],
+                'technical' => [
+                    'value' => $hypothesis['from_events']['mail_classified_technical'] ?: $hypothesis['live']['messages_technical'],
+                    'url' => route('platform.messages', [
+                        'filter' => ['classification' => MessageClassification::Technical->value],
+                    ]),
+                ],
+                'auto_matched' => [
+                    'value' => $hypothesis['from_events']['project_auto_matched'],
+                    'url' => route('platform.metrics.hypothesis'),
+                ],
+                'draft_unchanged' => [
+                    'value' => $hypothesis['from_events']['draft_approved_unchanged'],
+                    'url' => route('platform.manager-actions', [
+                        'filter' => ['status' => ManagerActionStatus::Approved->value],
+                    ]),
+                ],
+                'draft_edited' => [
+                    'value' => $hypothesis['from_events']['draft_edited'],
+                    'url' => route('platform.manager-actions', [
+                        'filter' => ['status' => ManagerActionStatus::Edited->value],
+                    ]),
+                ],
+                'rejected' => [
+                    'value' => $hypothesis['from_events']['action_rejected'],
+                    'url' => route('platform.manager-actions', [
+                        'filter' => ['status' => ManagerActionStatus::Rejected->value],
+                    ]),
+                ],
+                'corrections' => [
+                    'value' => $hypothesis['from_events']['analysis_corrected'] ?: $hypothesis['live']['analysis_corrections'],
+                    'url' => route('platform.metrics.hypothesis'),
+                ],
             ],
             'pendingActions' => ManagerAction::query()
                 ->with('project')
@@ -73,30 +136,13 @@ class DashboardScreen extends Screen
 
     public function commandBar(): iterable
     {
-        return [
-            Button::make('Синхронизировать почту')
-                ->icon('bs.arrow-repeat')
-                ->method('syncMail')
-                ->type(Color::PRIMARY),
-            Link::make('Входящие')->icon('bs.inbox')->route('platform.messages'),
-            Link::make('Игнорируемые')->icon('bs.eye-slash')->route('platform.messages.ignored'),
-            Link::make('Действия')->icon('bs.clipboard-check')->route('platform.manager-actions'),
-            Link::make('Метрики гипотезы')->icon('bs.bar-chart')->route('platform.metrics.hypothesis'),
-            Link::make('Журнал')->icon('bs.journal-text')->route('platform.activity-logs'),
-        ];
-    }
-
-    public function syncMail(): void
-    {
-        SyncYandexMailJob::dispatch(userId: auth()->id());
-
-        Toast::info('Синхронизация поставлена в очередь. Новые письма появятся после обработки worker’ом.');
+        return [];
     }
 
     public function layout(): iterable
     {
         return [
-            Layout::metrics([
+            new ClickableMetricsLayout([
                 'Всего писем' => 'metrics.messages_total',
                 'Ожидают обработки' => 'metrics.messages_pending',
                 'Требуют ручной обработки' => 'metrics.messages_needs_manual',
@@ -107,7 +153,7 @@ class DashboardScreen extends Screen
                 'Проекты' => 'metrics.projects',
             ]),
 
-            Layout::metrics([
+            new ClickableMetricsLayout([
                 'Получено (гипотеза)' => 'hypothesis.mail_received',
                 'Клиентские' => 'hypothesis.client',
                 'Технические' => 'hypothesis.technical',
@@ -118,26 +164,59 @@ class DashboardScreen extends Screen
                 'Исправления' => 'hypothesis.corrections',
             ]),
 
-            Layout::table('pendingActions', [
-                TD::make('id', 'ID')->width('80'),
-                TD::make('project', 'Проект')
-                    ->render(fn (ManagerAction $action) => e($action->project?->name ?? '—')),
-                TD::make('reason', 'Причина')
-                    ->render(fn (ManagerAction $action) => e(\Illuminate\Support\Str::limit((string) $action->reason, 80))),
-                TD::make('open', '')
-                    ->render(fn (ManagerAction $action) => Link::make('Открыть')
-                        ->route('platform.manager-actions.view', $action)),
-            ])->title('Ожидающие действия менеджера'),
+            Layout::block([
+                Layout::table('pendingActions', [
+                    TD::make('id', 'ID')->width('80')
+                        ->render(fn (ManagerAction $action) => Link::make((string) $action->id)
+                            ->route('platform.manager-actions.view', $action)),
+                    TD::make('project', 'Проект')
+                        ->render(function (ManagerAction $action) {
+                            if ($action->project === null) {
+                                return '—';
+                            }
 
-            Layout::table('needsManualMessages', [
-                TD::make('id', 'ID')->width('80'),
-                TD::make('sender', 'Отправитель'),
-                TD::make('subject', 'Тема')
-                    ->render(fn (Message $message) => e(\Illuminate\Support\Str::limit((string) $message->subject, 80))),
-                TD::make('open', '')
-                    ->render(fn (Message $message) => Link::make('Открыть')
-                        ->route('platform.messages.view', $message)),
-            ])->title('Сообщения без проекта / требуют ручной обработки'),
+                            return Link::make($action->project->name)
+                                ->route('platform.projects.edit', $action->project);
+                        }),
+                    TD::make('reason', 'Причина')
+                        ->render(fn (ManagerAction $action) => e(\Illuminate\Support\Str::limit((string) $action->reason, 80))),
+                    TD::make('open', '')
+                        ->render(fn (ManagerAction $action) => Link::make('Открыть')
+                            ->route('platform.manager-actions.view', $action)),
+                ]),
+            ])
+                ->title('Ожидающие действия менеджера')
+                ->vertical()
+                ->commands([
+                    Link::make('Все действия')
+                        ->icon('bs.clipboard-check')
+                        ->route('platform.manager-actions'),
+                ]),
+
+            Layout::block([
+                Layout::table('needsManualMessages', [
+                    TD::make('id', 'ID')->width('80')
+                        ->render(fn (Message $message) => Link::make((string) $message->id)
+                            ->route('platform.messages.view', $message)),
+                    TD::make('sender', 'Отправитель'),
+                    TD::make('subject', 'Тема')
+                        ->render(fn (Message $message) => Link::make(\Illuminate\Support\Str::limit((string) $message->subject, 80))
+                            ->route('platform.messages.view', $message)),
+                    TD::make('open', '')
+                        ->render(fn (Message $message) => Link::make('Открыть')
+                            ->route('platform.messages.view', $message)),
+                ]),
+            ])
+                ->title('Сообщения без проекта / требуют ручной обработки')
+                ->vertical()
+                ->commands([
+                    Link::make('Распределение')
+                        ->icon('bs.diagram-3')
+                        ->route('platform.messages.assign'),
+                    Link::make('Входящие')
+                        ->icon('bs.inbox')
+                        ->route('platform.messages'),
+                ]),
         ];
     }
 }

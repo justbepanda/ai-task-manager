@@ -43,6 +43,7 @@ final class ReanalyzeMessage
                 'processing_status' => MessageProcessingStatus::Classified,
                 'ai_summary' => null,
                 'ai_confidence' => null,
+                'agent_facts' => null,
                 'requires_manager' => null,
                 'processing_error' => null,
             ])->save();

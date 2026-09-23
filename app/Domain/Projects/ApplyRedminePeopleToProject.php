@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Domain\Projects;
 
+use App\Domain\Executors\EnsureExecutorManagerRole;
 use App\Domain\Executors\FindOrCreateExecutorFromDisplayName;
 use App\Models\Message;
 use App\Models\ProcessingLog;
@@ -18,6 +19,7 @@ class ApplyRedminePeopleToProject
         private readonly RedmineSubjectProjectExtractor $subjectExtractor,
         private readonly RedmineMailPeopleExtractor $peopleExtractor,
         private readonly FindOrCreateExecutorFromDisplayName $findOrCreateExecutor,
+        private readonly EnsureExecutorManagerRole $ensureManagerRole,
     ) {}
 
     /**
@@ -48,6 +50,10 @@ class ApplyRedminePeopleToProject
             if ($project->manager_executor_id === null) {
                 $project->manager_executor_id = $managerId;
                 $project->save();
+                $changed = true;
+            }
+
+            if ($this->ensureManagerRole->handle($manager->fresh() ?? $manager)) {
                 $changed = true;
             }
         }

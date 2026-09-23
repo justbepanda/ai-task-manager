@@ -5,11 +5,13 @@ namespace App\AI\Services;
 use App\AI\DTO\AnalysisResult;
 use App\AI\Exceptions\AnalysisException;
 use App\AI\Exceptions\AnalysisValidationException;
+use App\Domain\Conversations\UpdateConversationAgentMemory;
 use App\Domain\Metrics\HypothesisMetricsRecorder;
 use App\Domain\Projects\RedmineMailPeopleExtractor;
 use App\Enums\MessageClassification;
 use App\Enums\MessageProcessingStatus;
 use App\Hermes\Contracts\HermesAgent;
+use App\Hermes\Contracts\LlmProvider;
 use App\Hermes\DTO\StructuredAgentResult;
 use App\Jobs\ApplyEventJob;
 use App\Models\Event;
@@ -27,6 +29,8 @@ class AnalyzeMessage
         private readonly AnalysisResultValidator $validator,
         private readonly HypothesisMetricsRecorder $metrics,
         private readonly RedmineMailPeopleExtractor $redminePeople,
+        private readonly UpdateConversationAgentMemory $agentMemory,
+        private readonly LlmProvider $llm,
     ) {}
 
     public function handle(Message $message): ?Event
@@ -92,6 +96,22 @@ class AnalyzeMessage
             ]);
             $message->save();
 
+            $rawFacts = isset($rawPayload['agent_facts']) && is_array($rawPayload['agent_facts'])
+                ? $rawPayload['agent_facts']
+                : null;
+            $memoryResult = new AnalysisResult(
+                classification: $result->classification,
+                projectId: $result->projectId,
+                confidence: $result->confidence,
+                eventType: $result->eventType,
+                summary: $result->summary,
+                requiresManager: $requiresManager,
+                suggestedAction: $result->suggestedAction,
+                draftReply: $result->draftReply,
+                reason: $result->reason,
+            );
+            $this->agentMemory->apply($message, $memoryResult, $rawFacts);
+
             $event = Event::query()->create([
                 'message_id' => $message->id,
                 'project_id' => $projectId,
@@ -124,7 +144,7 @@ class AnalyzeMessage
                     'requires_manager' => $requiresManager,
                     'suggested_action' => $result->suggestedAction->value,
                     'project_id' => $projectId,
-                    'ai_model' => (string) config('ai.gemini.model', 'unknown'),
+                    'ai_model' => $this->resolvedAiModel(),
                     'agent' => 'hermes',
                     'ai_response' => SensitiveDataSanitizer::truncateJson($rawPayload),
                 ]),
@@ -165,7 +185,7 @@ class AnalyzeMessage
         $details = [
             'error_type' => $errorType,
             'error' => $safeMessage,
-            'ai_model' => (string) config('ai.gemini.model', 'unknown'),
+            'ai_model' => $this->resolvedAiModel(),
         ];
 
         if ($rawPayload !== null) {
@@ -184,5 +204,11 @@ class AnalyzeMessage
             'error_type' => $errorType,
             'error' => $safeMessage,
         ]);
+    }
+
+    private function resolvedAiModel(): string
+    {
+        return $this->llm->lastModel()
+            ?: (string) config('ai.gemini.model', 'unknown');
     }
 }

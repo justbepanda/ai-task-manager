@@ -52,6 +52,10 @@ class PlatformProvider extends OrchidServiceProvider
                 ->icon('bs.folder2')
                 ->route('platform.projects'),
 
+            Menu::make('Задачи')
+                ->icon('bs.list-task')
+                ->route('platform.tasks'),
+
             Menu::make('Клиенты')
                 ->icon('bs.building')
                 ->route('platform.client-companies')

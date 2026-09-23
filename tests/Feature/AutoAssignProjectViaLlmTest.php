@@ -223,7 +223,12 @@ class AutoAssignProjectViaLlmTest extends TestCase
         $this->assertNotNull($project);
         $this->assertSame($project->id, $message->project_id);
         $this->assertSame('Автосоздан из темы Redmine', $project->description);
-        $this->assertSame(0, $fake->completeJsonCalls);
+        // completeJson may still run for people-assign; project LLM-assign must not.
+        $this->assertFalse($message->metadata['project_match']['llm_auto_assigned'] ?? false);
+        $this->assertDatabaseMissing('processing_logs', [
+            'message_id' => $message->id,
+            'step' => 'project_auto_assigned_llm',
+        ]);
         $this->assertSame(0, Project::query()->where('name', 'SHOULD_NOT_CREATE')->count());
         $this->assertDatabaseHas('processing_logs', [
             'message_id' => $message->id,

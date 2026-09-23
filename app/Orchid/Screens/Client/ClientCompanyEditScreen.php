@@ -7,6 +7,7 @@ namespace App\Orchid\Screens\Client;
 use App\Domain\Clients\ClientCompanyService;
 use App\Models\ClientCompany;
 use App\Models\ClientContact;
+use App\Models\Project;
 use App\Orchid\Layouts\Client\ClientCompanyEditLayout;
 use Illuminate\Http\Request;
 use Orchid\Screen\Actions\Button;
@@ -25,7 +26,12 @@ class ClientCompanyEditScreen extends Screen
     {
         $this->company = $company;
         $company->load(['projects', 'contacts']);
-        $company->setAttribute('project_ids', $company->projects->pluck('id')->all());
+
+        if ($company->exists) {
+            $company->setAttribute('project_ids', $company->projects->pluck('id')->all());
+        } else {
+            $company->setAttribute('project_ids', $this->requestedProjectIds());
+        }
 
         return [
             'company' => $company,
@@ -80,20 +86,49 @@ class ClientCompanyEditScreen extends Screen
         return [
             Layout::block(ClientCompanyEditLayout::class)
                 ->title('Данные компании')
-                ->description('Контакты привязываются к компании; проекты можно связать без контактов.'),
+                ->description('Контакты привязываются к компании; проекты можно связать без контактов.')
+                ->vertical(),
 
-            Layout::table('contacts', [
-                TD::make('full_name', 'ФИО')
-                    ->render(fn (ClientContact $contact) => Link::make($contact->fullName())
-                        ->route('platform.client-contacts.edit', $contact)),
-                TD::make('position', 'Должность'),
-                TD::make('emails', 'Email')
-                    ->render(fn (ClientContact $contact) => e(implode(', ', $contact->emails ?? []))),
-                TD::make('open', '')
-                    ->render(fn (ClientContact $contact) => Link::make('Открыть')
-                        ->route('platform.client-contacts.edit', $contact)),
-            ])->title('Контакты'),
+            Layout::block([
+                Layout::table('contacts', [
+                    TD::make('full_name', 'ФИО')
+                        ->render(fn (ClientContact $contact) => Link::make($contact->fullName())
+                            ->route('platform.client-contacts.edit', $contact)),
+                    TD::make('position', 'Должность'),
+                    TD::make('emails', 'Email')
+                        ->render(fn (ClientContact $contact) => e(implode(', ', $contact->emails ?? []))),
+                    TD::make('open', '')
+                        ->render(fn (ClientContact $contact) => Link::make('Открыть')
+                            ->route('platform.client-contacts.edit', $contact)),
+                ]),
+            ])
+                ->title('Контакты')
+                ->vertical()
+                ->commands(
+                    $this->company?->exists
+                        ? [
+                            Link::make('Добавить контакт')
+                                ->icon('bs.person-plus')
+                                ->route('platform.client-contacts.create', $this->company),
+                        ]
+                        : []
+                ),
         ];
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function requestedProjectIds(): array
+    {
+        $projectId = (int) request()->query('project_id', 0);
+        if ($projectId <= 0) {
+            return [];
+        }
+
+        return Project::query()->whereKey($projectId)->exists()
+            ? [$projectId]
+            : [];
     }
 
     public function save(Request $request, ClientCompany $company, ClientCompanyService $companies)

@@ -130,7 +130,9 @@ return [
      */
 
     'resource' => [
-        'stylesheets' => [],
+        'stylesheets' => [
+            '/css/admin-inbox.css',
+        ],
         'scripts'     => [],
     ],
 

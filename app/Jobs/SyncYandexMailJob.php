@@ -13,6 +13,11 @@ class SyncYandexMailJob implements ShouldQueue
 {
     use Queueable;
 
+    /** Full multi-folder IMAP sync can exceed the default worker timeout. */
+    public int $timeout = 600;
+
+    public int $tries = 2;
+
     public function __construct(
         public readonly ?int $userId = null,
     ) {}

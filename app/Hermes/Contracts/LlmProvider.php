@@ -22,4 +22,9 @@ interface LlmProvider
      * @return array<string, mixed>
      */
     public function completeJson(string $systemPrompt, string $userPrompt): array;
+
+    /**
+     * Model id used for the last completeJson/analyze call (primary or fallback).
+     */
+    public function lastModel(): ?string;
 }

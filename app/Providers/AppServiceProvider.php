@@ -18,7 +18,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        $this->app->bind(AiAnalyzer::class, GeminiAiAnalyzer::class);
+        $this->app->singleton(GeminiAiAnalyzer::class);
+        $this->app->bind(AiAnalyzer::class, fn ($app) => $app->make(GeminiAiAnalyzer::class));
         $this->app->bind(LlmProvider::class, fn ($app) => $app->make(AiAnalyzer::class));
         $this->app->bind(HermesAgent::class, DefaultHermesAgent::class);
         $this->app->bind(MailProvider::class, YandexMailProvider::class);

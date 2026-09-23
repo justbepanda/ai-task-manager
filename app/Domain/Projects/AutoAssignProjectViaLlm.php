@@ -13,6 +13,7 @@ use App\Models\AppSetting;
 use App\Models\Message;
 use App\Models\ProcessingLog;
 use App\Models\Project;
+use App\Support\MailRoutingGuidance;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -26,6 +27,7 @@ class AutoAssignProjectViaLlm
     public function __construct(
         private readonly LlmProvider $llm,
         private readonly ProjectService $projects,
+        private readonly MergeProjects $mergeProjects,
         private readonly HypothesisMetricsRecorder $metrics,
     ) {}
 
@@ -70,6 +72,8 @@ class AutoAssignProjectViaLlm
                 'status' => 'failed',
                 'details' => [
                     'error' => $e->getMessage(),
+                    'ai_model' => $this->llm->lastModel()
+                        ?: (string) config('ai.gemini.model', 'unknown'),
                 ],
             ]);
 
@@ -100,15 +104,24 @@ class AutoAssignProjectViaLlm
         $project = $decision['project'];
 
         if ($project === null) {
-            $project = $this->projects->create([
-                'name' => $decision['proposed_name'],
-                'status' => ProjectStatus::Active,
-                'description' => 'Автосоздан через LLM-распределение',
-                'keywords' => $decision['aliases'] === []
-                    ? null
-                    : implode("\n", $decision['aliases']),
-            ]);
-            $created = true;
+            $needles = array_values(array_filter(array_merge(
+                [$decision['proposed_name'] ?? ''],
+                $decision['aliases'],
+            )));
+            $existing = $this->mergeProjects->findByFoldedNames($needles);
+            if ($existing !== null) {
+                $project = $existing;
+            } else {
+                $project = $this->projects->create([
+                    'name' => $decision['proposed_name'],
+                    'status' => ProjectStatus::Active,
+                    'description' => 'Автосоздан через LLM-распределение',
+                    'keywords' => $decision['aliases'] === []
+                        ? null
+                        : implode("\n", $decision['aliases']),
+                ]);
+                $created = true;
+            }
         }
 
         $message = $this->attachMessage($message, $project, $decision, $created, $threshold);
@@ -274,7 +287,7 @@ class AutoAssignProjectViaLlm
 
     private function systemPrompt(): string
     {
-        return <<<'PROMPT'
+        $base = <<<'PROMPT'
 Ты — помощник менеджера проектов. Определи, к какому проекту относится одно входящее письмо.
 Верни ТОЛЬКО валидный JSON без markdown.
 
@@ -297,6 +310,8 @@ class AutoAssignProjectViaLlm
 - reason — кратко, на русском.
 - confidence — твоя оценка уверенности 0..1.
 PROMPT;
+
+        return $base."\n".MailRoutingGuidance::projectAssignBlock();
     }
 
     /**

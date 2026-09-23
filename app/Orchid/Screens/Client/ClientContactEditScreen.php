@@ -7,6 +7,7 @@ namespace App\Orchid\Screens\Client;
 use App\Domain\Clients\ClientContactService;
 use App\Models\ClientCompany;
 use App\Models\ClientContact;
+use App\Models\Project;
 use App\Orchid\Layouts\Client\ClientContactEditLayout;
 use Illuminate\Http\Request;
 use Orchid\Screen\Actions\Button;
@@ -37,9 +38,12 @@ class ClientContactEditScreen extends Screen
 
         $service = app(ClientContactService::class);
         $this->contact->setAttribute('emails', $service->listToLines($this->contact->emails));
-        $this->contact->setAttribute('project_ids', $this->contact->exists
-            ? $this->contact->projects->pluck('id')->all()
-            : []);
+        $this->contact->setAttribute(
+            'project_ids',
+            $this->contact->exists
+                ? $this->contact->projects->pluck('id')->all()
+                : $this->requestedProjectIds()
+        );
 
         return [
             'contact' => $this->contact,
@@ -82,7 +86,8 @@ class ClientContactEditScreen extends Screen
         return [
             Layout::block(ClientContactEditLayout::class)
                 ->title('Данные контакта')
-                ->description('Контакт всегда принадлежит одной компании.'),
+                ->description('Контакт всегда принадлежит одной компании.')
+                ->vertical(),
         ];
     }
 
@@ -131,5 +136,20 @@ class ClientContactEditScreen extends Screen
         Toast::info('Контакт удалён.');
 
         return redirect()->route('platform.client-companies.edit', $company);
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function requestedProjectIds(): array
+    {
+        $projectId = (int) request()->query('project_id', 0);
+        if ($projectId <= 0) {
+            return [];
+        }
+
+        return Project::query()->whereKey($projectId)->exists()
+            ? [$projectId]
+            : [];
     }
 }
