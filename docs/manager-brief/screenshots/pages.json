@@ -1,0 +1,170 @@
+[
+  {
+    "prefix": "01-dashboard",
+    "path": "/admin/main",
+    "mode": "blocks",
+    "title": "Обзор",
+    "intro": "Сводные плашки, очередь действий менеджера и лента событий. Ниже первого экрана — другие блоки, поэтому несколько скринов.",
+    "shots": 3
+  },
+  {
+    "prefix": "02-inbox",
+    "path": "/admin/messages",
+    "mode": "single",
+    "title": "Входящие",
+    "intro": "Плашки-фильтры, фильтры и список писем. Ниже — только продолжение того же списка, один скрин.",
+    "shots": 1
+  },
+  {
+    "prefix": "03-projects",
+    "path": "/admin/projects",
+    "mode": "single",
+    "title": "Проекты",
+    "intro": "Список проектов менеджера.",
+    "shots": 1
+  },
+  {
+    "prefix": "04-tasks",
+    "path": "/admin/tasks",
+    "mode": "single",
+    "title": "Задачи",
+    "intro": "Список задач (Redmine / Jira / Aspro / переписка) с менеджером задачи.",
+    "shots": 1
+  },
+  {
+    "prefix": "05-manager-actions",
+    "path": "/admin/manager-actions",
+    "mode": "single",
+    "title": "Действия менеджера",
+    "intro": "Очередь предложений ИИ: проверить / ответить, подтвердить или отклонить.",
+    "shots": 1
+  },
+  {
+    "prefix": "06-events",
+    "path": "/admin/events",
+    "mode": "single",
+    "title": "События",
+    "intro": "Нормализованные события по письмам («что произошло»).",
+    "shots": 1
+  },
+  {
+    "prefix": "07-assign",
+    "path": "/admin/messages/assign",
+    "mode": "single",
+    "title": "Распределение по проектам",
+    "intro": "Ручная массовая привязка нераспределённых писем к проектам (по правилам, без LLM).",
+    "shots": 1
+  },
+  {
+    "prefix": "08-assign-llm",
+    "path": "/admin/messages/assign-llm",
+    "mode": "single",
+    "title": "Распределение (LLM)",
+    "intro": "Подсказки ИИ по привязке писем к проектам.",
+    "shots": 1
+  },
+  {
+    "prefix": "09-settings",
+    "path": "/admin/settings",
+    "mode": "blocks",
+    "title": "Настройки",
+    "intro": "Автосоздание проектов из Redmine и автораспределение через LLM, пороги уверенности.",
+    "shots": 1
+  },
+  {
+    "prefix": "10-mail-filters",
+    "path": "/admin/mail-filters",
+    "mode": "blocks",
+    "title": "Фильтры почты",
+    "intro": "Глобальный чёрный список: адреса, домены, стоп-слова.",
+    "shots": 1
+  },
+  {
+    "prefix": "11-clients",
+    "path": "/admin/client-companies",
+    "mode": "single",
+    "title": "Клиенты",
+    "intro": "Справочник компаний-клиентов.",
+    "shots": 1
+  },
+  {
+    "prefix": "12-executors",
+    "path": "/admin/executors",
+    "mode": "single",
+    "title": "Исполнители",
+    "intro": "Сотрудники нашей команды (назначаются на задачи).",
+    "shots": 1
+  },
+  {
+    "prefix": "13-metrics",
+    "path": "/admin/metrics/hypothesis",
+    "mode": "blocks",
+    "title": "Метрики гипотезы",
+    "intro": "Показатели для оценки гипотезы MVP (письма, проекты, черновики, исправления).",
+    "shots": 2
+  },
+  {
+    "prefix": "14-admin-tools",
+    "path": "/admin/admin-tools",
+    "mode": "blocks",
+    "title": "Сервисные команды",
+    "intro": "Кнопки служебных команд (синхронизация, переобработка, backfill и т.д.).",
+    "shots": 1
+  },
+  {
+    "prefix": "15-ignored",
+    "path": "/admin/messages/ignored",
+    "mode": "single",
+    "title": "Игнорируемые",
+    "intro": "Письма из глобального чёрного списка.",
+    "shots": 1
+  },
+  {
+    "prefix": "16-message-view",
+    "path": "/admin/messages/332",
+    "mode": "blocks",
+    "title": "Карточка письма",
+    "intro": "Одно письмо: метаданные, классификация, краткое описание ИИ, текст, журнал обработки, правки. Ниже — отдельные блоки карточки.",
+    "shots": 3
+  },
+  {
+    "prefix": "17-task-view",
+    "path": "/admin/tasks/171",
+    "mode": "blocks",
+    "title": "Карточка задачи",
+    "intro": "Задача проекта: ключ, статус, менеджер и исполнители задачи (можно менять), связанные письма.",
+    "shots": 2
+  },
+  {
+    "prefix": "18-project-edit",
+    "path": "/admin/projects/11/edit",
+    "mode": "blocks",
+    "title": "Карточка проекта",
+    "intro": "Проект: основные данные и правила сопоставления, менеджеры/исполнители с задач (только просмотр), задачи, письма, события.",
+    "shots": 5
+  },
+  {
+    "prefix": "19-manager-action-view",
+    "path": "/admin/manager-actions/245",
+    "mode": "blocks",
+    "title": "Карточка действия менеджера",
+    "intro": "Предложение ИИ: зачем нужно действие, черновик ответа, кнопки подтвердить / править / отклонить.",
+    "shots": 2
+  },
+  {
+    "prefix": "20-event-view",
+    "path": "/admin/events/337",
+    "mode": "blocks",
+    "title": "Карточка события",
+    "intro": "Нормализованное событие по письму: тип, summary, проект, уверенность.",
+    "shots": 1
+  },
+  {
+    "prefix": "21-executor-edit",
+    "path": "/admin/executors/11/edit",
+    "mode": "blocks",
+    "title": "Карточка исполнителя",
+    "intro": "Сотрудник: контакты, активность, связанные проекты.",
+    "shots": 1
+  }
+]
