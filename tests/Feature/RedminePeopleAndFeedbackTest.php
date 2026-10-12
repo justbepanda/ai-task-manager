@@ -4,13 +4,15 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
-use App\AI\Contracts\AiAnalyzer;
-use App\AI\FakeAiAnalyzer;
 use App\Domain\Projects\ApplyRedminePeopleToProject;
 use App\Enums\EventType;
 use App\Enums\MessageClassification;
 use App\Enums\MessageProcessingStatus;
 use App\Enums\ProjectStatus;
+use App\Enums\ProjectTaskSource;
+use App\Enums\ProjectTaskStatus;
+use App\AI\Contracts\AiAnalyzer;
+use App\AI\FakeAiAnalyzer;
 use App\Hermes\ProcessIncomingMessage;
 use App\Jobs\ApplyEventJob;
 use App\Jobs\ClassifyMessageJob;
@@ -20,6 +22,7 @@ use App\Models\Executor;
 use App\Models\ManagerAction;
 use App\Models\Message;
 use App\Models\Project;
+use App\Models\ProjectTask;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
 use Tests\TestCase;
@@ -41,11 +44,19 @@ class RedminePeopleAndFeedbackTest extends TestCase
         ]);
     }
 
-    public function test_applies_author_as_manager_and_assignee_as_executor(): void
+    public function test_applies_author_as_task_manager_and_assignee_as_executor(): void
     {
         $project = Project::factory()->create([
             'name' => 'Demo',
             'status' => ProjectStatus::Active,
+        ]);
+
+        $task = ProjectTask::query()->create([
+            'project_id' => $project->id,
+            'source' => ProjectTaskSource::Redmine,
+            'external_key' => '10',
+            'title' => 'Тест',
+            'status' => ProjectTaskStatus::Open,
         ]);
 
         $message = Message::factory()->create([
@@ -54,21 +65,53 @@ class RedminePeopleAndFeedbackTest extends TestCase
             'body' => "Автор: Мария Иванова\nНазначена: Евгений Сипров\n",
             'classification' => MessageClassification::Technical,
             'project_id' => $project->id,
+            'project_task_id' => $task->id,
             'processing_status' => MessageProcessingStatus::Classified,
         ]);
 
-        app(ApplyRedminePeopleToProject::class)->handle($message, $project);
+        app(ApplyRedminePeopleToProject::class)->handle($message, $project, $task);
 
-        $project->refresh()->load(['managerExecutor', 'executors']);
+        $task->refresh()->load(['managerExecutor', 'executors']);
+        $project->refresh()->load('executors');
 
-        $this->assertNotNull($project->manager_executor_id);
-        $this->assertSame('Мария', $project->managerExecutor?->first_name);
-        $this->assertSame('Иванова', $project->managerExecutor?->last_name);
-        $this->assertSame('Менеджер', $project->managerExecutor?->position);
+        $this->assertSame($task->manager_executor_id, $task->managerExecutor?->id);
+        $this->assertSame('Мария', $task->managerExecutor?->first_name);
+        $this->assertSame('Иванова', $task->managerExecutor?->last_name);
+        $this->assertSame('Менеджер', $task->managerExecutor?->position);
 
-        $names = $project->executors->map(fn (Executor $e) => $e->fullName())->all();
-        $this->assertTrue(collect($names)->contains(fn (string $n) => str_contains($n, 'Сипров')));
-        $this->assertTrue(collect($names)->contains(fn (string $n) => str_contains($n, 'Иванова')));
+        $taskNames = $task->executors->map(fn (Executor $e) => $e->fullName())->all();
+        $this->assertTrue(collect($taskNames)->contains(fn (string $n) => str_contains($n, 'Сипров')));
+        $this->assertTrue(collect($taskNames)->contains(fn (string $n) => str_contains($n, 'Иванова')));
+
+        $projectNames = $project->executors->map(fn (Executor $e) => $e->fullName())->all();
+        $this->assertTrue(collect($projectNames)->contains(fn (string $n) => str_contains($n, 'Сипров')));
+    }
+
+    public function test_applies_author_with_markdown_bullet_prefix(): void
+    {
+        $project = Project::factory()->create(['status' => ProjectStatus::Active]);
+        $task = ProjectTask::query()->create([
+            'project_id' => $project->id,
+            'source' => ProjectTaskSource::Redmine,
+            'external_key' => '11',
+            'title' => 'Bullet',
+            'status' => ProjectTaskStatus::Open,
+        ]);
+
+        $message = Message::factory()->create([
+            'sender' => 'redmine@kelnik.pro',
+            'subject' => '[Demo - Bug #11] Тест',
+            'body' => "* Автор: Пётр Петров\n* Назначена: Анна Козлова\n",
+            'classification' => MessageClassification::Technical,
+            'project_id' => $project->id,
+            'project_task_id' => $task->id,
+        ]);
+
+        app(ApplyRedminePeopleToProject::class)->handle($message, $project, $task);
+
+        $task->refresh()->load('managerExecutor');
+        $this->assertSame('Пётр', $task->managerExecutor?->first_name);
+        $this->assertSame('Петров', $task->managerExecutor?->last_name);
     }
 
     public function test_feedback_subject_sets_requires_manager_on_pipeline(): void
@@ -111,7 +154,11 @@ class RedminePeopleAndFeedbackTest extends TestCase
         $this->assertNotNull($project);
         $this->assertSame($project->id, $message->project_id);
         $this->assertTrue($message->requires_manager);
-        $this->assertNotNull($project->fresh()->manager_executor_id);
+        $this->assertNotNull($message->project_task_id);
+
+        $task = ProjectTask::query()->find($message->project_task_id);
+        $this->assertNotNull($task);
+        $this->assertNotNull($task->manager_executor_id);
         $this->assertTrue(
             ManagerAction::query()->where('message_id', $message->id)->where('status', 'pending')->exists()
             || $message->events()->exists(),

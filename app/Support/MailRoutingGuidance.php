@@ -21,9 +21,11 @@ final class MailRoutingGuidance
   • «Новая заявка на брокер-тур», «Ваш список недвижимости», выгрузки «в приложении к письму»;
   • типовые QA-заявки с тестовыми ФИО/телефонами без переписки.
 - НЕ ignored:
+  • формы «Заявка на обратный звонок / бронирование / …» с доменов проектов → classification=site_lead (не client);
   • Redmine/Jira (в т.ч. «(Обратная связь)» в теме тикета — это задача разработки);
   • «Сообщение о неисправности» / report-problems / баги ЛК — client или technical, проект ЛК (Tekta и аналоги);
   • живая переписка Re:/RE: с клиентом (рендеры, перенос ВМ, договорённости после встречи).
+- Заявка с сайта (site_lead): event_type=site_lead, requires_manager=true, suggested_action=review.
 - Для ignored: requires_manager=false, suggested_action=no_action, draft_reply=null.
 - Profitbase — платформа/инструмент, встречается на разных проектах. Не ставь project_id и не предлагай новый проект только из-за «Profitbase» в теме; нужны бренд клиента, домен или явный алиас проекта.
 - «Автоматический ответ» / out-of-office без рабочего содержания → classification=ignored.

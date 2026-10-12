@@ -17,6 +17,10 @@ use Illuminate\Support\Carbon;
  */
 class DetectClientFollowUps
 {
+    public function __construct(
+        private readonly SupersedeStaleConversationManagerActions $supersedeStaleActions,
+    ) {}
+
     /**
      * @return array{created: int, scanned: int}
      */
@@ -53,7 +57,7 @@ class DetectClientFollowUps
                 continue;
             }
 
-            ManagerAction::query()->create([
+            $action = ManagerAction::query()->create([
                 'project_id' => $message->project_id,
                 'event_id' => null,
                 'message_id' => $message->id,
@@ -67,6 +71,8 @@ class DetectClientFollowUps
                 ),
                 'draft_reply' => null,
             ]);
+
+            $this->supersedeStaleActions->afterCreated($action);
 
             $created++;
 

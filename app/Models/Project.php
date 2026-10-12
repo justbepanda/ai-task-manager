@@ -21,6 +21,7 @@ use Orchid\Screen\AsSource;
     'last_event_type',
     'last_event_at',
     'last_summary',
+    'agent_state',
 ])]
 class Project extends Model
 {
@@ -32,6 +33,7 @@ class Project extends Model
         return [
             'status' => ProjectStatus::class,
             'last_event_at' => 'datetime',
+            'agent_state' => 'array',
         ];
     }
 
@@ -93,5 +95,37 @@ class Project extends Model
     public function executors(): BelongsToMany
     {
         return $this->belongsToMany(Executor::class, 'executor_project');
+    }
+
+    /**
+     * Distinct managers assigned on project tasks (for read-only project UI).
+     *
+     * @return \Illuminate\Support\Collection<int, Executor>
+     */
+    public function taskManagers()
+    {
+        return Executor::query()
+            ->whereIn('id', $this->tasks()->whereNotNull('manager_executor_id')->select('manager_executor_id'))
+            ->orderBy('last_name')
+            ->orderBy('first_name')
+            ->get();
+    }
+
+    /**
+     * Distinct executors assigned on project tasks (for read-only project UI).
+     *
+     * @return \Illuminate\Support\Collection<int, Executor>
+     */
+    public function taskExecutors()
+    {
+        return Executor::query()
+            ->whereIn('id', function ($q): void {
+                $q->select('executor_id')
+                    ->from('executor_project_task')
+                    ->whereIn('project_task_id', $this->tasks()->select('id'));
+            })
+            ->orderBy('last_name')
+            ->orderBy('first_name')
+            ->get();
     }
 }

@@ -2,6 +2,7 @@
 
 namespace App\Domain\Events;
 
+use App\Domain\ManagerActions\SupersedeStaleConversationManagerActions;
 use App\Enums\EventType;
 use App\Enums\ManagerActionStatus;
 use App\Enums\ManagerActionType;
@@ -18,6 +19,10 @@ use Illuminate\Support\Facades\DB;
 
 class ApplyProjectEventService
 {
+    public function __construct(
+        private readonly SupersedeStaleConversationManagerActions $supersedeStaleActions,
+    ) {}
+
     /**
      * Apply a domain event to project state and optionally create a ManagerAction.
      * AI never mutates Project directly — only this service does.
@@ -211,7 +216,9 @@ class ApplyProjectEventService
             ->first();
 
         if ($existing !== null) {
-            return $existing;
+            $this->supersedeStaleActions->afterCreated($existing);
+
+            return $existing->fresh() ?? $existing;
         }
 
         $requiresManager = (bool) ($message?->requires_manager ?? $payload['requires_manager'] ?? false);
@@ -248,7 +255,7 @@ class ApplyProjectEventService
             $reason = $event->summary;
         }
 
-        return ManagerAction::query()->create([
+        $action = ManagerAction::query()->create([
             'project_id' => $projectId ?? $event->project_id ?? $message?->project_id,
             'event_id' => $event->id,
             'message_id' => $message?->id ?? $event->message_id,
@@ -257,6 +264,10 @@ class ApplyProjectEventService
             'reason' => $reason,
             'draft_reply' => $draft,
         ]);
+
+        $this->supersedeStaleActions->afterCreated($action);
+
+        return $action->fresh() ?? $action;
     }
 
     /**

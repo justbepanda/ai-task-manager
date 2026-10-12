@@ -44,6 +44,26 @@ class ProjectTaskKeyExtractorTest extends TestCase
     }
 
     #[Test]
+    public function extracts_aspro_notification_subject(): void
+    {
+        $message = new Message([
+            'subject' => 'Уведомление Задача: STAVNI — правка колл-трекинга',
+        ]);
+
+        $result = (new ProjectTaskKeyExtractor)->extract($message);
+
+        $this->assertNotNull($result);
+        $this->assertSame(ProjectTaskSource::Aspro, $result['source']);
+        $this->assertStringStartsWith('aspro:', $result['external_key']);
+        $this->assertStringContainsString('STAVNI', (string) $result['title']);
+
+        $again = (new ProjectTaskKeyExtractor)->extract(new Message([
+            'subject' => 'Уведомление Задача: STAVNI — правка колл-трекинга',
+        ]));
+        $this->assertSame($result['external_key'], $again['external_key']);
+    }
+
+    #[Test]
     public function returns_null_for_plain_subject(): void
     {
         $message = new Message(['subject' => 'Re: доработки по сайту']);

@@ -5,6 +5,18 @@ return [
 
     'gemini' => [
         'api_key' => env('GEMINI_API_KEY'),
+        // Extra keys (other Google accounts) when primary hits 429 — tried in order.
+        'api_keys' => array_values(array_unique(array_filter(array_map(
+            'trim',
+            array_merge(
+                [
+                    (string) env('GEMINI_API_KEY', ''),
+                    (string) env('GEMINI_API_KEY_2', ''),
+                    (string) env('GEMINI_API_KEY_3', ''),
+                ],
+                explode(',', (string) env('GEMINI_API_KEYS', '')),
+            ),
+        ), static fn (string $key): bool => $key !== ''))),
         'model' => env('GEMINI_MODEL', 'gemini-3.6-flash'),
         // Comma-separated fallbacks when primary returns 429/5xx after retries.
         'fallback_models' => array_values(array_filter(array_map(
@@ -42,6 +54,15 @@ return [
         'limit_per_run' => (int) env('AI_FOLLOW_UP_LIMIT', 20),
         // Cron hour (server time) for daily silence scan.
         'schedule_hour' => (int) env('AI_FOLLOW_UP_SCHEDULE_HOUR', 9),
+    ],
+
+    'queue' => [
+        // AnalyzeMessageJob retries for Gemini rate limits / transient HTTP errors.
+        'analyze_tries' => (int) env('AI_ANALYZE_TRIES', 10),
+        'analyze_backoff_seconds' => array_values(array_filter(array_map(
+            'intval',
+            explode(',', (string) env('AI_ANALYZE_BACKOFF_SECONDS', '60,120,300,600,900,1200,1800,1800,1800')),
+        ))),
     ],
 
     'assign_suggest' => [

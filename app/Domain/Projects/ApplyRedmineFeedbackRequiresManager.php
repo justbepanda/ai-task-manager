@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Domain\Projects;
 
 use App\Domain\Metrics\HypothesisMetricsRecorder;
+use App\Domain\ManagerActions\SupersedeStaleConversationManagerActions;
 use App\Enums\ManagerActionStatus;
 use App\Enums\ManagerActionType;
 use App\Models\ManagerAction;
@@ -19,6 +20,7 @@ class ApplyRedmineFeedbackRequiresManager
     public function __construct(
         private readonly RedmineMailPeopleExtractor $peopleExtractor,
         private readonly HypothesisMetricsRecorder $metrics,
+        private readonly SupersedeStaleConversationManagerActions $supersedeStaleActions,
     ) {}
 
     public function handle(Message $message): Message
@@ -75,7 +77,7 @@ class ApplyRedmineFeedbackRequiresManager
             return;
         }
 
-        ManagerAction::query()->create([
+        $action = ManagerAction::query()->create([
             'project_id' => $message->project_id,
             'event_id' => null,
             'message_id' => $message->id,
@@ -84,5 +86,7 @@ class ApplyRedmineFeedbackRequiresManager
             'reason' => 'Redmine: статус «Обратная связь» — требуется действие менеджера',
             'draft_reply' => null,
         ]);
+
+        $this->supersedeStaleActions->afterCreated($action);
     }
 }

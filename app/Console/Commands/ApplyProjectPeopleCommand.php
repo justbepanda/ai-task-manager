@@ -11,11 +11,11 @@ use Illuminate\Console\Command;
 class ApplyProjectPeopleCommand extends Command
 {
     protected $signature = 'projects:apply-people
-                            {--dry-run : Show which projects would be processed}
-                            {--all : Include projects that already have a manager}
-                            {--limit=50 : Max projects to process}';
+                            {--dry-run : Show which tasks would be processed}
+                            {--all : Include tasks that already have a manager}
+                            {--limit=50 : Max tasks to process}';
 
-    protected $description = 'Backfill project manager/executors from existing mail (Redmine rules + LLM)';
+    protected $description = 'Backfill task manager/executors from existing mail (Redmine rules + LLM)';
 
     public function handle(
         ApplyPeopleToProjectsBackfill $backfill,
@@ -32,7 +32,7 @@ class ApplyProjectPeopleCommand extends Command
         );
 
         $this->info(sprintf(
-            'Projects scanned=%d, touched=%d, skipped_no_message=%d%s',
+            'Tasks scanned=%d, touched=%d, skipped_no_message=%d%s',
             $result['scanned'],
             $result['touched'],
             $result['skipped_no_message'],
@@ -41,7 +41,8 @@ class ApplyProjectPeopleCommand extends Command
 
         foreach (array_slice($result['details'], 0, 30) as $row) {
             $this->line(sprintf(
-                '  #%d %s ← message #%d manager=%s applied=%s',
+                '  task #%d project #%d %s ← message #%d manager=%s applied=%s',
+                $row['project_task_id'],
                 $row['project_id'],
                 $row['project_name'],
                 $row['message_id'],
@@ -60,7 +61,7 @@ class ApplyProjectPeopleCommand extends Command
                 action: 'apply_people',
                 status: 'ok',
                 summary: sprintf(
-                    'Менеджеры/исполнители: просмотрено %d, обновлено %d',
+                    'Менеджеры/исполнители задач: просмотрено %d, обновлено %d',
                     $result['scanned'],
                     $result['touched'],
                 ),

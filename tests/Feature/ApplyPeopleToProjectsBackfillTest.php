@@ -10,9 +10,12 @@ use App\Domain\Projects\ApplyPeopleToProjectsBackfill;
 use App\Enums\MessageClassification;
 use App\Enums\MessageProcessingStatus;
 use App\Enums\ProjectStatus;
+use App\Enums\ProjectTaskSource;
+use App\Enums\ProjectTaskStatus;
 use App\Models\Executor;
 use App\Models\Message;
 use App\Models\Project;
+use App\Models\ProjectTask;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
@@ -22,7 +25,7 @@ class ApplyPeopleToProjectsBackfillTest extends TestCase
     use RefreshDatabase;
 
     #[Test]
-    public function backfill_sets_manager_for_projects_without_one(): void
+    public function backfill_sets_manager_for_tasks_without_one(): void
     {
         $manager = Executor::factory()->create([
             'last_name' => 'Иванов',
@@ -32,11 +35,20 @@ class ApplyPeopleToProjectsBackfillTest extends TestCase
 
         $project = Project::factory()->create([
             'status' => ProjectStatus::Active,
+        ]);
+
+        $task = ProjectTask::query()->create([
+            'project_id' => $project->id,
+            'source' => ProjectTaskSource::EmailThread,
+            'external_key' => 't1',
+            'title' => 'Сроки',
+            'status' => ProjectTaskStatus::Open,
             'manager_executor_id' => null,
         ]);
 
         Message::factory()->create([
             'project_id' => $project->id,
+            'project_task_id' => $task->id,
             'classification' => MessageClassification::Client,
             'processing_status' => MessageProcessingStatus::Applied,
             'subject' => 'Сроки',
@@ -61,7 +73,7 @@ class ApplyPeopleToProjectsBackfillTest extends TestCase
 
         $this->assertSame(1, $result['scanned']);
         $this->assertSame(1, $result['touched']);
-        $this->assertSame($manager->id, $project->fresh()->manager_executor_id);
+        $this->assertSame($manager->id, $task->fresh()->manager_executor_id);
     }
 
     #[Test]
@@ -69,11 +81,19 @@ class ApplyPeopleToProjectsBackfillTest extends TestCase
     {
         $project = Project::factory()->create([
             'status' => ProjectStatus::Active,
+        ]);
+
+        $task = ProjectTask::query()->create([
+            'project_id' => $project->id,
+            'source' => ProjectTaskSource::EmailThread,
+            'external_key' => 't2',
+            'status' => ProjectTaskStatus::Open,
             'manager_executor_id' => null,
         ]);
 
         Message::factory()->create([
             'project_id' => $project->id,
+            'project_task_id' => $task->id,
             'classification' => MessageClassification::Client,
             'body' => 'x',
         ]);
@@ -85,7 +105,7 @@ class ApplyPeopleToProjectsBackfillTest extends TestCase
         );
 
         $this->assertSame(1, $result['touched']);
-        $this->assertNull($project->fresh()->manager_executor_id);
+        $this->assertNull($task->fresh()->manager_executor_id);
     }
 
     #[Test]

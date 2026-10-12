@@ -38,7 +38,15 @@ class MessageFiltersLayout extends Rows
                     ->title('Проект')
                     ->empty('Все')
                     ->options($projects),
-            ])->widthColumns('1fr 1fr 1fr'),
+
+                Select::make('filter.requires_manager')
+                    ->title('Нужен менеджер')
+                    ->empty('Все')
+                    ->options([
+                        '1' => 'Да',
+                        '0' => 'Нет',
+                    ]),
+            ])->widthColumns('1fr 1fr 1fr 1fr'),
 
             Button::make('Применить фильтры')
                 ->icon('bs.funnel')

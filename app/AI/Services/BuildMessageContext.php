@@ -100,6 +100,8 @@ class BuildMessageContext
                 'name' => $message->project->name,
                 'description' => $message->project->description,
                 'status' => $message->project->status->value,
+                'last_summary' => $message->project->last_summary,
+                'agent_state' => is_array($message->project->agent_state) ? $message->project->agent_state : null,
             ];
             $instruction = $message->project->instruction?->body;
         }

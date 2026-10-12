@@ -30,6 +30,7 @@ class HypothesisMetricsReport
         $labels = [
             'Получено писем' => $fromEvents['mail_received'] ?: $live['messages_total'],
             'Клиентские письма' => $fromEvents['mail_classified_client'] ?: $live['messages_client'],
+            'Заявки с сайта' => $fromEvents['mail_classified_site_lead'] ?: $live['messages_site_lead'],
             'Технические письма' => $fromEvents['mail_classified_technical'] ?: $live['messages_technical'],
             'Рассылки' => $fromEvents['mail_classified_newsletter'],
             'Личные' => $fromEvents['mail_classified_personal'],
@@ -91,6 +92,7 @@ class HypothesisMetricsReport
         $names = [
             'mail_received',
             'mail_classified_client',
+            'mail_classified_site_lead',
             'mail_classified_technical',
             'mail_classified_newsletter',
             'mail_classified_personal',
@@ -129,6 +131,7 @@ class HypothesisMetricsReport
         return [
             'messages_total' => Message::query()->count(),
             'messages_client' => Message::query()->where('classification', MessageClassification::Client)->count(),
+            'messages_site_lead' => Message::query()->where('classification', MessageClassification::SiteLead)->count(),
             'messages_technical' => Message::query()->where('classification', MessageClassification::Technical)->count(),
             'messages_newsletter' => Message::query()->where('classification', MessageClassification::Newsletter)->count(),
             'messages_personal' => Message::query()->where('classification', MessageClassification::Personal)->count(),

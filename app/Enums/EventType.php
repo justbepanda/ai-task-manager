@@ -14,6 +14,7 @@ enum EventType: string
     case TaskCompleted = 'task_completed';
     case TechnicalNotification = 'technical_notification';
     case InformationOnly = 'information_only';
+    case SiteLead = 'site_lead';
 
     public function label(): string
     {
@@ -28,6 +29,7 @@ enum EventType: string
             self::TaskCompleted => 'Задача завершена',
             self::TechnicalNotification => 'Техническое уведомление',
             self::InformationOnly => 'Только информация',
+            self::SiteLead => 'Заявка с сайта',
         };
     }
 

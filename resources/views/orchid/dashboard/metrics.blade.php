@@ -5,10 +5,11 @@
                 $value = is_array($metric) ? ($metric['value'] ?? 0) : $metric;
                 $url = is_array($metric) ? ($metric['url'] ?? null) : null;
                 $diff = is_array($metric) ? ($metric['diff'] ?? null) : null;
+                $active = is_array($metric) && ! empty($metric['active']);
             @endphp
             <div class="col">
                 @if(is_string($url) && $url !== '')
-                    <a href="{{ $url }}" class="p-4 bg-white rounded shadow-sm h-100 d-flex flex-column text-decoration-none text-reset dashboard-metric-card">
+                    <a href="{{ $url }}" class="p-4 bg-white rounded shadow-sm h-100 d-flex flex-column text-decoration-none text-reset dashboard-metric-card{{ $active ? ' is-active' : '' }}">
                         <small class="text-muted d-block mb-1">{{ __($key) }}</small>
                         <p class="h3 text-body-emphasis fw-light mt-auto mb-0">
                             {{ $value }}
@@ -36,5 +37,9 @@
     a.dashboard-metric-card:hover {
         box-shadow: 0 0.35rem 0.85rem rgba(0, 0, 0, 0.08) !important;
         outline: 1px solid rgba(13, 110, 253, 0.35);
+    }
+    a.dashboard-metric-card.is-active {
+        outline: 2px solid rgba(13, 110, 253, 0.55);
+        box-shadow: 0 0.35rem 0.85rem rgba(13, 110, 253, 0.12) !important;
     }
 </style>

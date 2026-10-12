@@ -6,8 +6,12 @@ use App\AI\DTO\AnalysisResult;
 use App\AI\Exceptions\AnalysisException;
 use App\AI\Exceptions\AnalysisValidationException;
 use App\Domain\Conversations\UpdateConversationAgentMemory;
+use App\Domain\Classification\SiteLeadMatcher;
 use App\Domain\Metrics\HypothesisMetricsRecorder;
 use App\Domain\Projects\RedmineMailPeopleExtractor;
+use App\Domain\Projects\UpdateProjectAgentState;
+use App\Enums\EventType;
+use App\Enums\ManagerActionType;
 use App\Enums\MessageClassification;
 use App\Enums\MessageProcessingStatus;
 use App\Hermes\Contracts\HermesAgent;
@@ -30,6 +34,8 @@ class AnalyzeMessage
         private readonly HypothesisMetricsRecorder $metrics,
         private readonly RedmineMailPeopleExtractor $redminePeople,
         private readonly UpdateConversationAgentMemory $agentMemory,
+        private readonly UpdateProjectAgentState $projectAgentState,
+        private readonly SiteLeadMatcher $siteLeadMatcher,
         private readonly LlmProvider $llm,
     ) {}
 
@@ -48,6 +54,12 @@ class AnalyzeMessage
 
             return null;
         } catch (AnalysisException $e) {
+            if ($e->isRetryable()) {
+                $this->markDeferred($message, $e->getMessage(), $e->errorType);
+
+                throw $e;
+            }
+
             $this->markFailed($message, $e->getMessage(), $e->errorType, $rawPayload);
 
             return null;
@@ -85,10 +97,26 @@ class AnalyzeMessage
                 $requiresManager = true;
             }
 
+            $eventType = $result->eventType;
+            $suggestedAction = $result->suggestedAction;
+            $summary = $result->summary;
+            if ($this->siteLeadMatcher->matches($message)
+                || $classification === MessageClassification::SiteLead) {
+                $classification = MessageClassification::SiteLead;
+                $eventType = EventType::SiteLead;
+                $requiresManager = true;
+                if ($suggestedAction === ManagerActionType::NoAction) {
+                    $suggestedAction = ManagerActionType::Review;
+                }
+                if (trim($summary) === '' || str_starts_with(mb_strtolower($summary), 'техническ')) {
+                    $summary = 'Заявка с сайта: '.trim((string) ($message->subject ?? 'без темы'));
+                }
+            }
+
             $message->fill([
                 'classification' => $classification,
                 'project_id' => $projectId,
-                'ai_summary' => $result->summary,
+                'ai_summary' => $summary,
                 'ai_confidence' => $result->confidence,
                 'requires_manager' => $requiresManager,
                 'processing_status' => MessageProcessingStatus::Analyzed,
@@ -103,29 +131,36 @@ class AnalyzeMessage
                 classification: $result->classification,
                 projectId: $result->projectId,
                 confidence: $result->confidence,
-                eventType: $result->eventType,
-                summary: $result->summary,
+                eventType: $eventType,
+                summary: $summary,
                 requiresManager: $requiresManager,
-                suggestedAction: $result->suggestedAction,
+                suggestedAction: $suggestedAction,
                 draftReply: $result->draftReply,
                 reason: $result->reason,
             );
             $this->agentMemory->apply($message, $memoryResult, $rawFacts);
 
+            if ($projectId !== null) {
+                $project = \App\Models\Project::query()->find($projectId);
+                if ($project !== null) {
+                    $this->projectAgentState->apply($project, $message->fresh() ?? $message, $memoryResult);
+                }
+            }
+
             $event = Event::query()->create([
                 'message_id' => $message->id,
                 'project_id' => $projectId,
-                'type' => $result->eventType,
-                'summary' => $result->summary,
+                'type' => $eventType,
+                'summary' => $summary,
                 'confidence' => $result->confidence,
                 'payload' => [
                     'classification' => $result->classification->value,
                     'project_id' => $result->projectId,
                     'confidence' => $result->confidence,
-                    'event_type' => $result->eventType->value,
-                    'summary' => $result->summary,
+                    'event_type' => $eventType->value,
+                    'summary' => $summary,
                     'requires_manager' => $requiresManager,
-                    'suggested_action' => $result->suggestedAction->value,
+                    'suggested_action' => $suggestedAction->value,
                     'draft_reply' => $result->draftReply,
                     'reason' => $result->reason,
                     'message_classification_kept' => $classification->value,
@@ -139,10 +174,10 @@ class AnalyzeMessage
                 'status' => 'ok',
                 'details' => SensitiveDataSanitizer::sanitizeDetails([
                     'event_id' => $event->id,
-                    'event_type' => $result->eventType->value,
+                    'event_type' => $eventType->value,
                     'confidence' => $result->confidence,
                     'requires_manager' => $requiresManager,
-                    'suggested_action' => $result->suggestedAction->value,
+                    'suggested_action' => $suggestedAction->value,
                     'project_id' => $projectId,
                     'ai_model' => $this->resolvedAiModel(),
                     'agent' => 'hermes',
@@ -152,13 +187,13 @@ class AnalyzeMessage
 
             if ($requiresManager) {
                 $this->metrics->record('event_requires_manager', [
-                    'event_type' => $result->eventType->value,
+                    'event_type' => $eventType->value,
                 ], $message, projectId: $projectId);
             }
 
             if (is_string($result->draftReply) && trim($result->draftReply) !== '') {
                 $this->metrics->record('draft_created', [
-                    'suggested_action' => $result->suggestedAction->value,
+                    'suggested_action' => $suggestedAction->value,
                 ], $message, projectId: $projectId);
             }
 
@@ -166,6 +201,43 @@ class AnalyzeMessage
 
             return $event;
         });
+    }
+
+    /**
+     * Soft-fail while waiting for a queue retry (rate limit / transient Gemini errors).
+     * Does not set processing_status=failed so the job can be retried.
+     */
+    private function markDeferred(Message $message, string $safeMessage, string $errorType): void
+    {
+        $status = $message->processing_status;
+        if ($status === MessageProcessingStatus::Failed) {
+            $status = MessageProcessingStatus::Classified;
+        }
+
+        $message->update([
+            'processing_status' => $status === MessageProcessingStatus::Pending
+                ? MessageProcessingStatus::Classified
+                : $status,
+            'processing_error' => $safeMessage,
+        ]);
+
+        ProcessingLog::query()->create([
+            'message_id' => $message->id,
+            'step' => 'ai_analyzed',
+            'status' => 'deferred',
+            'details' => SensitiveDataSanitizer::sanitizeDetails([
+                'error_type' => $errorType,
+                'error' => $safeMessage,
+                'ai_model' => $this->resolvedAiModel(),
+                'retry' => true,
+            ]),
+        ]);
+
+        Log::warning('AnalyzeMessage deferred for queue retry', [
+            'message_id' => $message->id,
+            'error_type' => $errorType,
+            'error' => $safeMessage,
+        ]);
     }
 
     /**

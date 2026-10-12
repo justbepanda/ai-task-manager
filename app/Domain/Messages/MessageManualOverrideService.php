@@ -2,6 +2,7 @@
 
 namespace App\Domain\Messages;
 
+use App\Domain\Conversations\PropagateProjectToConversationMessages;
 use App\Domain\Metrics\HypothesisMetricsRecorder;
 use App\Enums\MessageClassification;
 use App\Enums\MessageProcessingStatus;
@@ -15,6 +16,7 @@ class MessageManualOverrideService
 {
     public function __construct(
         private readonly HypothesisMetricsRecorder $metrics,
+        private readonly PropagateProjectToConversationMessages $propagateProject,
     ) {}
 
     /**
@@ -28,7 +30,9 @@ class MessageManualOverrideService
      */
     public function apply(Message $message, array $overrides): Message
     {
-        return DB::transaction(function () use ($message, $overrides): Message {
+        $propagatedProjectId = null;
+
+        $result = DB::transaction(function () use ($message, $overrides, &$propagatedProjectId): Message {
             $changedFields = [];
 
             if (array_key_exists('classification', $overrides)) {
@@ -40,6 +44,9 @@ class MessageManualOverrideService
             if (array_key_exists('project_id', $overrides)) {
                 if ($this->overrideProject($message, $overrides['project_id'])) {
                     $changedFields[] = 'project_id';
+                    if ($message->project_id !== null) {
+                        $propagatedProjectId = (int) $message->project_id;
+                    }
                 }
             }
 
@@ -51,8 +58,16 @@ class MessageManualOverrideService
                 ], $message);
             }
 
-            return $message->fresh(['project', 'events']);
+            return $message->fresh(['project', 'events', 'conversation']);
         });
+
+        if ($propagatedProjectId !== null && $result !== null) {
+            $this->propagateProject->handle($result, $propagatedProjectId);
+
+            return $result->fresh(['project', 'events', 'conversation']) ?? $result;
+        }
+
+        return $result;
     }
 
     /**
@@ -75,6 +90,7 @@ class MessageManualOverrideService
 
         return match ($message->classification) {
             MessageClassification::Client,
+            MessageClassification::SiteLead,
             MessageClassification::Unknown => true,
             default => false,
         };

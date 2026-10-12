@@ -23,11 +23,11 @@ class MailFilterSettingSeederTest extends TestCase
         $this->assertContains('id.yandex.ru', $settings->blocked_domains);
         $this->assertContains('id.yandex.com', $settings->blocked_domains);
         $this->assertContains('пароль для приложения', $settings->subject_stop_words);
-        $this->assertContains('Заявка на обратный звонок', $settings->subject_stop_words);
-        $this->assertContains('Заказ обратного звонка', $settings->subject_stop_words);
-        $this->assertContains('Заявка на бронирование', $settings->subject_stop_words);
-        $this->assertContains('Заявка на рассрочку', $settings->subject_stop_words);
-        $this->assertContains('Заявка на обратную связь', $settings->subject_stop_words);
+        $this->assertNotContains('Заявка на обратный звонок', $settings->subject_stop_words);
+        $this->assertNotContains('Заказ обратного звонка', $settings->subject_stop_words);
+        $this->assertNotContains('Заявка на бронирование', $settings->subject_stop_words);
+        $this->assertNotContains('Заявка на рассрочку', $settings->subject_stop_words);
+        $this->assertNotContains('Заявка на обратную связь', $settings->subject_stop_words);
         $this->assertContains('ЛК Брокера, регистрация', $settings->subject_stop_words);
         $this->assertContains('calendar.yandex.ru', $settings->blocked_domains);
         $this->assertContains('360.yandex.ru', $settings->blocked_domains);
@@ -49,7 +49,7 @@ class MailFilterSettingSeederTest extends TestCase
             'id' => 1,
             'blocked_emails' => ['custom@example.com'],
             'blocked_domains' => ['custom.example'],
-            'subject_stop_words' => ['Моё слово', 'Оценка:'],
+            'subject_stop_words' => ['Моё слово', 'Оценка:', 'Заявка на обратный звонок'],
             'body_stop_words' => [],
         ]);
 
@@ -66,5 +66,6 @@ class MailFilterSettingSeederTest extends TestCase
             $settings->subject_stop_words,
         );
         $this->assertNotContains('Оценка:', $settings->subject_stop_words);
+        $this->assertNotContains('Заявка на обратный звонок', $settings->subject_stop_words);
     }
 }

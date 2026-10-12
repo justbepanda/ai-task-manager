@@ -15,7 +15,17 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        //
+        $middleware->trustProxies(
+            at: '*',
+            headers: Request::HEADER_X_FORWARDED_FOR
+                | Request::HEADER_X_FORWARDED_HOST
+                | Request::HEADER_X_FORWARDED_PORT
+                | Request::HEADER_X_FORWARDED_PROTO,
+        );
+
+        $middleware->web(prepend: [
+            \App\Http\Middleware\UseForwardedPublicUrl::class,
+        ]);
     })
     ->withSchedule(function (Schedule $schedule): void {
         $minutes = max(1, (int) config('mail_providers.sync_interval_minutes', 5));

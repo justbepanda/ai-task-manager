@@ -41,7 +41,8 @@ class RedmineMailPeopleExtractor
 
         foreach ($labels as $label) {
             $quoted = preg_quote($label, '/');
-            if (preg_match('/(?:^|\n)\s*'.$quoted.'\s*:\s*(.+?)\s*(?=\n|$)/ui', $plain, $matches) === 1) {
+            // Allow list markers: "* Автор:", "- Автор:", "• Автор:"
+            if (preg_match('/(?:^|\n)\s*(?:[\*\-•]\s*)?'.$quoted.'\s*:\s*(.+?)\s*(?=\n|$)/ui', $plain, $matches) === 1) {
                 $value = trim($matches[1]);
                 $value = trim($value, " \t\"'«»");
                 if ($value !== '') {

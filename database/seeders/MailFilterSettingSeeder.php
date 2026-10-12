@@ -16,6 +16,13 @@ class MailFilterSettingSeeder extends Seeder
         'Оценка:',
         // Broken: required a char between «Студия» and «№», so «Студия № 222» never matched.
         'regex:/,\s*(?:\d+-комнатн|Студия\s+.+\s*№)/ui',
+        // Site leads are project work now (SiteLeadMatcher → site_lead), not ignored.
+        'Заявка на обратный звонок',
+        'Заказ обратного звонка',
+        'Заявка на бронирование',
+        'Заявка на рассрочку',
+        'Заявка на обратную связь',
+        'Новая заявка на обратную связь',
     ];
 
     /**
@@ -78,14 +85,9 @@ class MailFilterSettingSeeder extends Seeder
                 'Новый вход в аккаунт',
                 'Восстановление пароля',
                 'Security alert',
-                // Website lead forms (RBI / Tekta / similar) — not project correspondence.
-                'Заявка на обратный звонок',
-                'Заказ обратного звонка',
-                'Заявка на бронирование',
-                'Заявка на рассрочку',
-                'Заявка на обратную связь',
-                'Новая заявка на обратную связь',
                 // Product ЛК automations (not manager project work).
+                // Site lead forms (callback / booking / installment) are NOT ignored —
+                // they become site_lead via SiteLeadMatcher.
                 'ЛК Брокера, регистрация',
                 'ЛК Клиента, регистрация',
                 'Зарегистрирован пользователь',

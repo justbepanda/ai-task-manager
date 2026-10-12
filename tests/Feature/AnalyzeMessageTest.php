@@ -101,6 +101,62 @@ class AnalyzeMessageTest extends TestCase
     }
 
     #[Test]
+    public function rate_limit_defers_and_rethrows_for_queue_retry(): void
+    {
+        Bus::fake([ApplyEventJob::class]);
+
+        $fake = (new FakeAiAnalyzer)->withException(
+            new AnalysisException('Gemini перегружен', 'rate_limit'),
+        );
+        $this->app->instance(AiAnalyzer::class, $fake);
+
+        $project = Project::factory()->create();
+        $message = $this->classifiedMessage($project);
+
+        try {
+            (new AnalyzeMessageJob($message->id))->handle(app(\App\AI\Services\AnalyzeMessage::class));
+            $this->fail('Expected AnalysisException to be rethrown for queue retry');
+        } catch (AnalysisException $e) {
+            $this->assertTrue($e->isRetryable());
+            $this->assertSame('rate_limit', $e->errorType);
+        }
+
+        $message->refresh();
+
+        $this->assertNotSame(MessageProcessingStatus::Failed, $message->processing_status);
+        $this->assertSame('Gemini перегружен', $message->processing_error);
+        $this->assertSame(0, Event::query()->count());
+        Bus::assertNotDispatched(ApplyEventJob::class);
+
+        $this->assertDatabaseHas('processing_logs', [
+            'message_id' => $message->id,
+            'step' => 'ai_analyzed',
+            'status' => 'deferred',
+        ]);
+    }
+
+    #[Test]
+    public function analyze_job_failed_callback_marks_failed_after_retries_exhausted(): void
+    {
+        $project = Project::factory()->create();
+        $message = $this->classifiedMessage($project, [
+            'processing_status' => MessageProcessingStatus::Classified,
+            'processing_error' => 'Gemini перегружен',
+        ]);
+
+        $job = new AnalyzeMessageJob($message->id);
+        $job->failed(new AnalysisException('Gemini перегружен', 'rate_limit'));
+
+        $message->refresh();
+        $this->assertSame(MessageProcessingStatus::Failed, $message->processing_status);
+        $this->assertDatabaseHas('processing_logs', [
+            'message_id' => $message->id,
+            'step' => 'ai_analyzed',
+            'status' => 'failed',
+        ]);
+    }
+
+    #[Test]
     public function unknown_event_type_fails_validation(): void
     {
         Bus::fake([ApplyEventJob::class]);

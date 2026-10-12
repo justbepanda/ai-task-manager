@@ -36,6 +36,10 @@ final class ProjectTaskKeyExtractor
             return $jira;
         }
 
+        if ($aspro = $this->extractAspro($subject)) {
+            return $aspro;
+        }
+
         return null;
     }
 
@@ -100,6 +104,39 @@ final class ProjectTaskKeyExtractor
         }
 
         return null;
+    }
+
+    /**
+     * Aspro.Cloud: «Уведомление <task title>» / «Уведомление Задача: <title>».
+     * No numeric id — stable key is a hash of the normalized title.
+     *
+     * @return array{
+     *     source: ProjectTaskSource,
+     *     external_key: string,
+     *     title: string|null,
+     *     status: ProjectTaskStatus|null
+     * }|null
+     */
+    private function extractAspro(string $subject): ?array
+    {
+        if (preg_match('/^Уведомление\s+(?:Задача:\s*)?(.+)$/ui', $subject, $m) !== 1) {
+            return null;
+        }
+
+        $title = trim($m[1]);
+        if ($title === '' || mb_stripos($title, 'чат') !== false) {
+            return null;
+        }
+
+        $normalized = mb_strtolower($title);
+        $key = 'aspro:'.substr(hash('sha256', $normalized), 0, 20);
+
+        return [
+            'source' => ProjectTaskSource::Aspro,
+            'external_key' => $key,
+            'title' => mb_strlen($title) > 180 ? mb_substr($title, 0, 177).'…' : $title,
+            'status' => null,
+        ];
     }
 
     private function statusFromHint(string $hint): ?ProjectTaskStatus

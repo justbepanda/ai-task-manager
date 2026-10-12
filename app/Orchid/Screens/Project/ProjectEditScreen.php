@@ -19,6 +19,7 @@ use Illuminate\Validation\Rule;
 use Orchid\Screen\Actions\Button;
 use Orchid\Screen\Actions\Link;
 use Orchid\Screen\Screen;
+use Orchid\Screen\Sight;
 use Orchid\Screen\TD;
 use Orchid\Support\Color;
 use Orchid\Support\Facades\Layout;
@@ -29,10 +30,12 @@ class ProjectEditScreen extends Screen
 {
     public ?Project $project = null;
 
+    public bool $hasAgentState = false;
+
     public function query(Project $project): iterable
     {
         $this->project = $project;
-        $project->load(['instruction', 'matchingRule', 'clientCompanies', 'clientContacts.clientCompany', 'executors', 'managerExecutor']);
+        $project->load(['instruction', 'matchingRule', 'clientCompanies', 'clientContacts.clientCompany', 'tasks.managerExecutor', 'tasks.executors']);
 
         $service = app(ProjectService::class);
         $rule = $project->matchingRule;
@@ -50,17 +53,22 @@ class ProjectEditScreen extends Screen
         $project->setAttribute('technical_sources', $service->listToLines($rule?->technical_sources));
         $project->setAttribute('custom_rules', $service->listToLines($rule?->custom_rules));
 
+        $agentState = is_array($project->agent_state) ? $project->agent_state : [];
+        $this->hasAgentState = $agentState !== [];
+
         return [
             'project' => $project,
             'clientCompanies' => $project->exists ? $project->clientCompanies : collect(),
             'clientContacts' => $project->exists ? $project->clientContacts : collect(),
-            'executors' => $project->exists ? $project->executors : collect(),
+            'taskManagers' => $project->exists ? $project->taskManagers() : collect(),
+            'taskExecutors' => $project->exists ? $project->taskExecutors() : collect(),
             'messages' => $project->exists
                 ? Message::query()->where('project_id', $project->id)->latest('received_at')->limit(20)->get()
                 : collect(),
             'tasks' => $project->exists
                 ? ProjectTask::query()
                     ->where('project_id', $project->id)
+                    ->with(['managerExecutor', 'executors'])
                     ->withCount('messages')
                     ->orderByDesc('last_message_at')
                     ->orderByDesc('id')
@@ -116,6 +124,8 @@ class ProjectEditScreen extends Screen
                 ->description('Инструкция AI и детерминированные правила хранятся отдельно.')
                 ->vertical(),
 
+            ...$this->agentStateLayout(),
+
             Layout::block([
                 Layout::table('clientCompanies', [
                     TD::make('name', 'Клиент')
@@ -166,7 +176,19 @@ class ProjectEditScreen extends Screen
                 ]))),
 
             Layout::block([
-                Layout::table('executors', [
+                Layout::table('taskManagers', [
+                    TD::make('full_name', 'Менеджер')
+                        ->render(fn (Executor $executor) => Link::make($executor->fullName())
+                            ->route('platform.executors.edit', $executor)),
+                    TD::make('position', 'Должность'),
+                ]),
+            ])
+                ->title('Менеджеры задач')
+                ->description('Собираются с задач проекта (поле «Автор» в Redmine / менеджер задачи). Назначаются на карточке задачи.')
+                ->vertical(),
+
+            Layout::block([
+                Layout::table('taskExecutors', [
                     TD::make('full_name', 'Исполнитель')
                         ->render(fn (Executor $executor) => Link::make($executor->fullName())
                             ->route('platform.executors.edit', $executor)),
@@ -175,17 +197,9 @@ class ProjectEditScreen extends Screen
                         ->render(fn (Executor $executor) => $executor->is_active ? 'Да' : 'Нет'),
                 ]),
             ])
-                ->title('Исполнители')
-                ->description('Сотрудники нашей компании на проекте.')
-                ->vertical()
-                ->commands([
-                    Link::make('Добавить исполнителя')
-                        ->icon('bs.plus-circle')
-                        ->href($projectExists
-                            ? route('platform.executors.create', ['project_id' => $projectId])
-                            : route('platform.executors.create'))
-                        ->canSee($projectExists),
-                ]),
+                ->title('Исполнители задач')
+                ->description('Собираются с задач проекта. Назначаются на карточке задачи.')
+                ->vertical(),
 
             Layout::block([
                 Layout::table('tasks', [
@@ -194,6 +208,8 @@ class ProjectEditScreen extends Screen
                     TD::make('title', 'Задача')
                         ->render(fn (ProjectTask $task) => Link::make(Str::limit((string) ($task->title ?: $task->displayLabel()), 80))
                             ->route('platform.tasks.view', $task)),
+                    TD::make('manager', 'Менеджер')
+                        ->render(fn (ProjectTask $task) => e($task->managerExecutor?->fullName() ?? '—')),
                     TD::make('status', 'Статус')
                         ->render(fn (ProjectTask $task) => e($task->status->label())),
                     TD::make('messages_count', 'Писем')
@@ -201,8 +217,8 @@ class ProjectEditScreen extends Screen
                     TD::make('last_message_at', 'Последнее')
                         ->render(fn (ProjectTask $task) => e($task->last_message_at?->format('d.m.Y H:i') ?? '—')),
                     TD::make('open', '')
-                        ->render(fn (ProjectTask $task) => Link::make('Письма')
-                            ->route('platform.messages', ['filter' => ['project_task_id' => $task->id]])),
+                        ->render(fn (ProjectTask $task) => Link::make('Открыть')
+                            ->route('platform.tasks.view', $task)),
                 ]),
             ])
                 ->title('Задачи проекта')
@@ -277,13 +293,52 @@ class ProjectEditScreen extends Screen
         ];
     }
 
+    /**
+     * @return list<\Orchid\Screen\Layout>
+     */
+    private function agentStateLayout(): array
+    {
+        if (! $this->hasAgentState) {
+            return [];
+        }
+
+        return [
+            Layout::legend('project', [
+                Sight::make('agent_topic', 'Тема')->render(function (Project $project): string {
+                    $state = is_array($project->agent_state) ? $project->agent_state : [];
+
+                    return e(trim((string) ($state['topic'] ?? '')) ?: '—');
+                }),
+                Sight::make('agent_waiting_for', 'Ожидаем')->render(function (Project $project): string {
+                    $state = is_array($project->agent_state) ? $project->agent_state : [];
+
+                    return e(trim((string) ($state['waiting_for'] ?? '')) ?: '—');
+                }),
+                Sight::make('agent_open_questions', 'Открытые вопросы')->render(function (Project $project): string {
+                    $state = is_array($project->agent_state) ? $project->agent_state : [];
+                    $open = $state['open_questions'] ?? [];
+                    if (! is_array($open) || $open === []) {
+                        return '—';
+                    }
+
+                    return e(implode('; ', array_map(static fn ($q) => (string) $q, $open)));
+                }),
+                Sight::make('agent_last_summary', 'Последнее summary')->render(function (Project $project): string {
+                    $state = is_array($project->agent_state) ? $project->agent_state : [];
+
+                    return e(trim((string) ($state['last_summary'] ?? '')) ?: '—');
+                }),
+            ])
+                ->title('Память агента (проект)'),
+        ];
+    }
+
     public function save(Request $request, Project $project, ProjectService $projects)
     {
         $validated = $request->validate([
             'project.name' => ['required', 'string', 'max:255'],
             'project.description' => ['nullable', 'string'],
             'project.status' => ['required', Rule::enum(ProjectStatus::class)],
-            'project.manager_executor_id' => ['nullable', 'integer', 'exists:executors,id'],
             'project.instruction_body' => ['nullable', 'string'],
             'project.client_emails' => ['nullable', 'string'],
             'project.staff_emails' => ['nullable', 'string'],

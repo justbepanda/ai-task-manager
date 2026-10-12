@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Domain\Projects;
 
+use App\AI\Exceptions\AnalysisException;
+use App\Domain\Conversations\PropagateProjectToConversationMessages;
 use App\Domain\Metrics\HypothesisMetricsRecorder;
 use App\Enums\MessageClassification;
 use App\Enums\MessageProcessingStatus;
@@ -29,6 +31,7 @@ class AutoAssignProjectViaLlm
         private readonly ProjectService $projects,
         private readonly MergeProjects $mergeProjects,
         private readonly HypothesisMetricsRecorder $metrics,
+        private readonly PropagateProjectToConversationMessages $propagateProject,
     ) {}
 
     /**
@@ -65,6 +68,47 @@ class AutoAssignProjectViaLlm
                 $this->userPrompt($message, $projects, $bodyChars),
             );
             $decision = $this->parseDecision($payload, $projects, $threshold);
+        } catch (AnalysisException $e) {
+            if ($e->isRetryable()) {
+                ProcessingLog::query()->create([
+                    'message_id' => $message->id,
+                    'step' => 'project_auto_assigned_llm',
+                    'status' => 'deferred',
+                    'details' => [
+                        'error' => $e->getMessage(),
+                        'error_type' => $e->errorType,
+                        'retry' => true,
+                        'ai_model' => $this->llm->lastModel()
+                            ?: (string) config('ai.gemini.model', 'unknown'),
+                    ],
+                ]);
+
+                Log::warning('AutoAssignProjectViaLlm: deferred for queue retry', [
+                    'message_id' => $message->id,
+                    'error_type' => $e->errorType,
+                ]);
+
+                throw $e;
+            }
+
+            ProcessingLog::query()->create([
+                'message_id' => $message->id,
+                'step' => 'project_auto_assigned_llm',
+                'status' => 'failed',
+                'details' => [
+                    'error' => $e->getMessage(),
+                    'error_type' => $e->errorType,
+                    'ai_model' => $this->llm->lastModel()
+                        ?: (string) config('ai.gemini.model', 'unknown'),
+                ],
+            ]);
+
+            Log::warning('AutoAssignProjectViaLlm: LLM call failed', [
+                'message_id' => $message->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
         } catch (Throwable $e) {
             ProcessingLog::query()->create([
                 'message_id' => $message->id,
@@ -266,8 +310,10 @@ class AutoAssignProjectViaLlm
         ]);
 
         $status = $message->processing_status;
-        if ($message->classification === MessageClassification::Client
-            && $status === MessageProcessingStatus::NeedsManual) {
+        if (in_array($message->classification, [
+            MessageClassification::Client,
+            MessageClassification::SiteLead,
+        ], true) && $status === MessageProcessingStatus::NeedsManual) {
             $status = MessageProcessingStatus::Classified;
         }
 
@@ -282,7 +328,13 @@ class AutoAssignProjectViaLlm
             $message->conversation->update(['project_id' => $project->id]);
         }
 
-        return $message->fresh(['conversation', 'project']);
+        $fresh = $message->fresh(['conversation', 'project']);
+        if ($fresh !== null) {
+            $this->propagateProject->handle($fresh, (int) $project->id);
+            $fresh = $fresh->fresh(['conversation', 'project']) ?? $fresh;
+        }
+
+        return $fresh ?? $message;
     }
 
     private function systemPrompt(): string

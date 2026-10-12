@@ -10,10 +10,13 @@ use App\Domain\Projects\ApplyPeopleToProjectViaLlm;
 use App\Enums\MessageClassification;
 use App\Enums\MessageProcessingStatus;
 use App\Enums\ProjectStatus;
+use App\Enums\ProjectTaskSource;
+use App\Enums\ProjectTaskStatus;
 use App\Models\Executor;
 use App\Models\Message;
 use App\Models\ProcessingLog;
 use App\Models\Project;
+use App\Models\ProjectTask;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -37,11 +40,19 @@ class ApplyPeopleToProjectViaLlmTest extends TestCase
 
         $project = Project::factory()->create([
             'status' => ProjectStatus::Active,
-            'manager_executor_id' => null,
+        ]);
+
+        $task = ProjectTask::query()->create([
+            'project_id' => $project->id,
+            'source' => ProjectTaskSource::EmailThread,
+            'external_key' => 'conv-1',
+            'title' => 'Планировки',
+            'status' => ProjectTaskStatus::Open,
         ]);
 
         $message = Message::factory()->create([
             'project_id' => $project->id,
+            'project_task_id' => $task->id,
             'classification' => MessageClassification::Client,
             'processing_status' => MessageProcessingStatus::Classified,
             'subject' => 'По планировкам',
@@ -58,14 +69,16 @@ class ApplyPeopleToProjectViaLlmTest extends TestCase
             'reason' => 'Упомянуты менеджер и исполнитель',
         ]));
 
-        $result = app(ApplyPeopleToProjectViaLlm::class)->handle($message, $project);
+        $result = app(ApplyPeopleToProjectViaLlm::class)->handle($message, $project, $task);
 
         $this->assertTrue($result['applied']);
-        $project->refresh()->load(['managerExecutor', 'executors']);
-        $this->assertSame($manager->id, $project->manager_executor_id);
+        $task->refresh()->load(['managerExecutor', 'executors']);
+        $project->refresh()->load('executors');
+        $this->assertSame($manager->id, $task->manager_executor_id);
         $this->assertSame('Менеджер', $manager->fresh()->position);
+        $this->assertTrue($task->executors->contains('id', $assignee->id));
+        $this->assertTrue($task->executors->contains('id', $manager->id));
         $this->assertTrue($project->executors->contains('id', $assignee->id));
-        $this->assertTrue($project->executors->contains('id', $manager->id));
 
         $this->assertDatabaseHas('processing_logs', [
             'message_id' => $message->id,
@@ -74,7 +87,7 @@ class ApplyPeopleToProjectViaLlmTest extends TestCase
         ]);
     }
 
-    public function test_creates_executor_from_proposed_name_and_does_not_overwrite_manager(): void
+    public function test_creates_executor_from_proposed_name_and_does_not_overwrite_task_manager(): void
     {
         $existingManager = Executor::factory()->create([
             'last_name' => 'Уже',
@@ -84,12 +97,22 @@ class ApplyPeopleToProjectViaLlmTest extends TestCase
 
         $project = Project::factory()->create([
             'status' => ProjectStatus::Active,
+        ]);
+
+        $task = ProjectTask::query()->create([
+            'project_id' => $project->id,
+            'source' => ProjectTaskSource::Redmine,
+            'external_key' => '42',
+            'title' => 'Bug',
+            'status' => ProjectTaskStatus::Open,
             'manager_executor_id' => $existingManager->id,
         ]);
+        $task->executors()->syncWithoutDetaching([$existingManager->id]);
         $project->executors()->syncWithoutDetaching([$existingManager->id]);
 
         $message = Message::factory()->create([
             'project_id' => $project->id,
+            'project_task_id' => $task->id,
             'classification' => MessageClassification::Technical,
             'processing_status' => MessageProcessingStatus::Classified,
             'subject' => 'Bug',
@@ -106,12 +129,12 @@ class ApplyPeopleToProjectViaLlmTest extends TestCase
             'reason' => 'Новый исполнитель из письма',
         ]));
 
-        app(ApplyPeopleToProjectViaLlm::class)->handle($message, $project);
+        app(ApplyPeopleToProjectViaLlm::class)->handle($message, $project, $task);
 
-        $project->refresh()->load('executors');
-        $this->assertSame($existingManager->id, $project->manager_executor_id);
+        $task->refresh()->load('executors');
+        $this->assertSame($existingManager->id, $task->manager_executor_id);
         $this->assertTrue(
-            $project->executors->contains(fn (Executor $e) => str_contains($e->fullName(), 'Исполнитель')
+            $task->executors->contains(fn (Executor $e) => str_contains($e->fullName(), 'Исполнитель')
                 || str_contains($e->fullName(), 'Новый')),
         );
         $this->assertGreaterThanOrEqual(2, Executor::query()->count());
@@ -120,8 +143,15 @@ class ApplyPeopleToProjectViaLlmTest extends TestCase
     public function test_skips_ignored_messages(): void
     {
         $project = Project::factory()->create(['status' => ProjectStatus::Active]);
+        $task = ProjectTask::query()->create([
+            'project_id' => $project->id,
+            'source' => ProjectTaskSource::EmailThread,
+            'external_key' => 'x',
+            'status' => ProjectTaskStatus::Open,
+        ]);
         $message = Message::factory()->create([
             'project_id' => $project->id,
+            'project_task_id' => $task->id,
             'classification' => MessageClassification::Ignored,
         ]);
 
@@ -133,7 +163,7 @@ class ApplyPeopleToProjectViaLlmTest extends TestCase
             'reason' => 'should not run',
         ]));
 
-        $result = app(ApplyPeopleToProjectViaLlm::class)->handle($message, $project);
+        $result = app(ApplyPeopleToProjectViaLlm::class)->handle($message, $project, $task);
 
         $this->assertFalse($result['applied']);
         $this->assertSame(0, ProcessingLog::query()->where('step', 'llm_people_applied')->count());

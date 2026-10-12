@@ -13,4 +13,16 @@ class AnalysisException extends RuntimeException
     ) {
         parent::__construct($message, 0, $previous);
     }
+
+    /**
+     * Transient provider issues that should be retried via the queue.
+     */
+    public function isRetryable(): bool
+    {
+        return in_array($this->errorType, [
+            'rate_limit',
+            'http_error',
+            'timeout',
+        ], true);
+    }
 }

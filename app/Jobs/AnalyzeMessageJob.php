@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\AI\Exceptions\AnalysisException;
 use App\AI\Services\AnalyzeMessage;
 use App\Enums\MessageClassification;
 use App\Enums\MessageProcessingStatus;
@@ -16,11 +17,22 @@ class AnalyzeMessageJob implements ShouldQueue
 {
     use Queueable;
 
-    public int $tries = 3;
+    public int $tries;
+
+    /**
+     * @var list<int>
+     */
+    public array $backoff;
 
     public function __construct(
         public int $messageId,
-    ) {}
+    ) {
+        $this->tries = max(1, (int) config('ai.queue.analyze_tries', 10));
+        $backoff = config('ai.queue.analyze_backoff_seconds', [60, 120, 300, 600, 900, 1200, 1800]);
+        $this->backoff = is_array($backoff)
+            ? array_values(array_map('intval', $backoff))
+            : [60, 120, 300, 600, 900];
+    }
 
     public function handle(AnalyzeMessage $analyzeMessage): void
     {
@@ -69,13 +81,37 @@ class AnalyzeMessageJob implements ShouldQueue
             return;
         }
 
-        $analyzeMessage->handle($message);
+        try {
+            $analyzeMessage->handle($message);
+        } catch (AnalysisException $e) {
+            if ($e->isRetryable()) {
+                Log::warning('AnalyzeMessageJob: retryable Gemini/provider error', [
+                    'message_id' => $this->messageId,
+                    'attempt' => $this->attempts(),
+                    'tries' => $this->tries,
+                    'error_type' => $e->errorType,
+                ]);
+
+                throw $e;
+            }
+
+            // Permanent analysis errors are already persisted by AnalyzeMessage::markFailed.
+            Log::warning('AnalyzeMessageJob: permanent analysis error', [
+                'message_id' => $this->messageId,
+                'error_type' => $e->errorType,
+            ]);
+        }
     }
 
     public function failed(?Throwable $exception): void
     {
         $message = Message::query()->find($this->messageId);
         if ($message === null) {
+            return;
+        }
+
+        // Permanent AnalysisException already marked the message inside AnalyzeMessage.
+        if ($exception instanceof AnalysisException && ! $exception->isRetryable()) {
             return;
         }
 
@@ -92,12 +128,15 @@ class AnalyzeMessageJob implements ShouldQueue
             'status' => 'failed',
             'details' => [
                 'error' => $safe,
+                'exhausted_retries' => true,
+                'attempts' => $this->attempts(),
             ],
         ]);
 
-        Log::error('AnalyzeMessageJob failed', [
+        Log::error('AnalyzeMessageJob failed after retries', [
             'message_id' => $this->messageId,
             'error' => $safe,
+            'attempts' => $this->attempts(),
         ]);
     }
 }

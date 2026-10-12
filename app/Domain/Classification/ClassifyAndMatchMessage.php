@@ -3,6 +3,7 @@
 namespace App\Domain\Classification;
 
 use App\Domain\Classification\DTO\ClassificationResult;
+use App\Domain\Conversations\PropagateProjectToConversationMessages;
 use App\Domain\Metrics\HypothesisMetricsRecorder;
 use App\Domain\Projects\AutoCreateProjectFromIncomingMail;
 use App\Domain\Projects\DTO\MatchResult;
@@ -10,6 +11,7 @@ use App\Domain\Projects\ProjectMatcher;
 use App\Enums\MessageClassification;
 use App\Enums\MessageProcessingStatus;
 use App\Jobs\AnalyzeMessageJob;
+use App\Models\AppSetting;
 use App\Models\Message;
 use App\Models\ProcessingLog;
 use Illuminate\Support\Facades\DB;
@@ -21,6 +23,7 @@ class ClassifyAndMatchMessage
         private readonly ProjectMatcher $matcher,
         private readonly AutoCreateProjectFromIncomingMail $autoCreateProject,
         private readonly HypothesisMetricsRecorder $metrics,
+        private readonly PropagateProjectToConversationMessages $propagateProject,
     ) {}
 
     /**
@@ -33,7 +36,7 @@ class ClassifyAndMatchMessage
      */
     public function handle(Message $message): array
     {
-        return DB::transaction(function () use ($message): array {
+        $result = DB::transaction(function () use ($message): array {
             $message = Message::query()->lockForUpdate()->findOrFail($message->id);
             $message->load('conversation');
 
@@ -165,8 +168,18 @@ class ClassifyAndMatchMessage
                 'needs_llm' => $needsLlm,
                 /** @deprecated use needs_llm */
                 'dispatch_analyze' => $needsLlm,
+                'project_id' => $projectId,
             ];
         });
+
+        if (($result['project_id'] ?? null) !== null) {
+            $this->propagateProject->handle($result['message'], (int) $result['project_id']);
+            $result['message'] = $result['message']->fresh(['conversation', 'processingLogs']) ?? $result['message'];
+        }
+
+        unset($result['project_id']);
+
+        return $result;
     }
 
     private function resolveProcessingStatus(
@@ -176,11 +189,26 @@ class ClassifyAndMatchMessage
     ): MessageProcessingStatus {
         $type = $classification->classification;
 
+        $wouldNeedManual = $type === MessageClassification::Unknown
+            || (
+                in_array($type, [MessageClassification::Client, MessageClassification::SiteLead], true)
+                && ($match->ambiguous || $projectId === null)
+            );
+
+        // LLM auto-assign still runs after classify — do not send to «ручная обработка»
+        // until that step finishes (or permanently fails / skips).
+        if ($wouldNeedManual
+            && $projectId === null
+            && $type !== MessageClassification::Ignored
+            && (bool) AppSetting::current()->auto_assign_projects_llm) {
+            return MessageProcessingStatus::Classified;
+        }
+
         if ($type === MessageClassification::Unknown) {
             return MessageProcessingStatus::NeedsManual;
         }
 
-        if ($type === MessageClassification::Client) {
+        if (in_array($type, [MessageClassification::Client, MessageClassification::SiteLead], true)) {
             if ($match->ambiguous || $projectId === null) {
                 return MessageProcessingStatus::NeedsManual;
             }
@@ -204,6 +232,7 @@ class ClassifyAndMatchMessage
         return match ($classification->classification) {
             // Full analysis when project known, or pick among candidates when ambiguous/unmatched.
             MessageClassification::Client,
+            MessageClassification::SiteLead,
             MessageClassification::Unknown => $projectId !== null || $hasCandidates,
             // Light summary for project technical mail (e.g. Redmine).
             MessageClassification::Technical => $projectId !== null,

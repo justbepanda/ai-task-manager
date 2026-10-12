@@ -238,10 +238,13 @@ Redmine уведомления с определённого проекта та
 Сотрудник нашей компании.
 
 - ФИО, position, emails (JSON), telegram, phone, notes, is_active
-- M2M с `projects` через `executor_project` (независимо от клиентов)
+- M2M с `projects` через `executor_project` (агрегат / справочник на проекте)
+- M2M с `project_tasks` через `executor_project_task` (основная привязка исполнителей к задачам)
+- `manager_executor_id` на `ProjectTask` — менеджер конкретной задачи (обычно «Автор» из Redmine)
 - `fullName(): string`
 
 Сервис: `App\Domain\Executors\ExecutorService`.
+Ручное редактирование людей на задаче: `App\Domain\Tasks\ProjectTaskPeopleService`.
 
 ------
 
@@ -264,6 +267,8 @@ Project
 `ProjectTask` — единица работы внутри проекта. Redmine/Jira: один тикет = одна задача (много уведомлений). Клиентская почта без тикета: один `Conversation` ≈ одна задача (`source=email_thread`).
 
 Дополнительно: `agent_state` (JSON) — сжатая память диалога для Hermes (`topic`, `status`, `open_questions`, `commitments`, `waiting_for`, `last_summary`, …). Пишет Laravel после валидации Hermes (`UpdateConversationAgentMemory`), не сам LLM напрямую.
+
+У `Project` также есть `agent_state` (JSON) — сжатое состояние проекта (`topic`, `waiting_for`, `open_questions`, `last_summary`, …). Пишет `UpdateProjectAgentState` после Hermes; на карточке проекта в Orchid — блок только для чтения.
 
 ------
 
@@ -367,12 +372,15 @@ completed
 
 ```text
 client
+site_lead
 technical
 newsletter
 personal
 ignored
 unknown
 ```
+
+`site_lead` («Заявка с сайта») — формы с сайтов (обратный звонок, бронирование и т.п.): `SiteLeadMatcher` по доменам `classification.site_lead_domains` и темам `site_lead_subjects`. Не путать с `client` (живая переписка).
 
 `ignored` («Игнорируемое») — глобальный чёрный список (Яндекс ID, пароли приложений, системный шум). Отдельно от `technical` (Redmine/Jira и другие проектные технические источники).
 
@@ -409,6 +417,8 @@ project_id = null
 Не придумывать проект.
 
 Сообщение должно попасть в очередь на ручную классификацию.
+
+**Цепочка писем** — сущность `Conversation` (по `In-Reply-To` / `References` / Message-ID при импорте). Когда одно письмо в цепочке получает `project_id`, сервис `PropagateProjectToConversationMessages` привязывает тот же проект ко всем соседним письмам без проекта (кроме `ignored`), снимает `needs_manual` → `classified` и при необходимости ставит Hermes-анализ в очередь. Уже привязанные к другому проекту письма не перезаписываются.
 
 ------
 
@@ -527,6 +537,8 @@ No action
 
 Если да — создать ManagerAction.
 
+В одной переписке (`conversation` / `project_task`) одновременно остаётся только одно pending-действие — по самому новому письму. Более старые pending автоматически закрываются (`completed`) сервисом `SupersedeStaleConversationManagerActions`. Разовая зачистка: `manager-actions:supersede-stale` (кнопка в «Сервисные команды»).
+
 Для ответа клиенту создать draft.
 
 Менеджер должен иметь возможность:
@@ -580,7 +592,8 @@ CRUD проектов в Orchid.
 - список связанных сообщений;
 - список задач (`ProjectTask`);
 - список событий;
-- связанные клиенты / контакты / исполнители (read-only на карточке проекта).
+- связанные клиенты / контакты (read-only);
+- менеджеры и исполнители — **read-only агрегаты с задач** проекта (не выбираются на карточке проекта).
 
 ------
 
@@ -588,9 +601,13 @@ CRUD проектов в Orchid.
 
 Список `ProjectTask` (`platform.tasks`, `/admin/tasks`), пункт меню «Задачи» рядом с «Проекты».
 
-Фильтры: проект, источник (Redmine/Jira/переписка), статус.
-Карточка задачи (`platform.tasks.view`): ключ, проект, статус, связанные письма.
-С карточки проекта — таблица задач; из списка — ссылки на письма (`filter[project_task_id]`).
+Фильтры: проект, источник (Redmine/Jira/Aspro/переписка), статус.
+Карточка задачи (`platform.tasks.view`): ключ, проект, статус, **менеджер задачи** (`manager_executor_id`), **исполнители задачи** (M2M `executor_project_task`, редактируются), связанные письма.
+С карточки проекта — таблица задач (с колонкой менеджера); из списка — ссылки на письма (`filter[project_task_id]`).
+
+`ProjectTaskSource::Aspro` — уведомления Aspro.Cloud (`Уведомление …` / `Уведомление Задача: …`); ключ — hash нормализованного title (`ProjectTaskKeyExtractor`).
+
+Сервис ручного назначения людей: `App\Domain\Tasks\ProjectTaskPeopleService`.
 
 ------
 
@@ -627,13 +644,19 @@ CRUD проектов в Orchid.
 - проект;
 - результат анализа (с записью в `analysis_corrections`).
 
+Экран **«События»** (`platform.events`, `/admin/events`, меню «Работа» рядом с «Действия менеджера»):
+список `Event` (фильтры project / type / applied), колонки id→письмо, type, summary (полный), project, message, confidence, applied_at, created_at.
+Опционально карточка `platform.events.view`.
+
+**Заявки с сайта (site leads):** темы вроде «Заявка на обратный звонок» / «Заявка на бронирование» с доменов `classification.site_lead_domains` (в т.ч. rbi.ru) → `SiteLeadMatcher` → classification=`site_lead` (не ignored и не client), до blacklist `noreply@`. Hermes / AnalyzeMessage: `event_type=site_lead`, `requires_manager=true`. Stop-words заявок удаляются из `MailFilterSettingSeeder`.
+
 Экран **«Распределение по проектам»** (`platform.messages.assign`, `/admin/messages/assign`):
 группирует нераспределённые письма по кандидатам `ProjectMatcher` (порог `project_match_suggest_threshold`, без LLM),
 массовая привязка и создание проекта + привязка (`SuggestUnassignedMessageAssignments`, `BulkAttachMessagesToProject`).
 Ссылка в commandBar входящих и пункт меню «Распределение» под «Почта».
 
 Hermes LLM вызывается для:
-- `client` / `unknown` с `project_id` **или** с кандидатами `ProjectMatcher` (ambiguous/unmatched);
+- `client` / `site_lead` / `unknown` с `project_id` **или** с кандидатами `ProjectMatcher` (ambiguous/unmatched);
 - `technical` с известным `project_id` (режим `technical_summary` — краткий summary без draft).
 
 В контекст Hermes также входят `analysis_corrections` письма и недавние правки по проекту.
@@ -641,7 +664,7 @@ Hermes LLM вызывается для:
 Ежедневно (scheduler) `DetectClientFollowUpsJob` создаёт `ManagerAction` типа `follow_up`, если последнее письмо в диалоге — клиентское и старше `ai.follow_up.silence_days` (по умолчанию 3). CLI: `messages:detect-follow-ups`.
 
 Экран **«Сервисные команды»** (`platform.admin-tools`, `/admin/admin-tools`):
-кнопки для artisan (`mail:sync`, `messages:reprocess`, `--apply-mail-filters`, `messages:detect-follow-ups`, `projects:apply-people`, `projects:merge-duplicates`, `messages:repair-bodies`, `messages:purge-empty`, метрики) с описанием «что / когда»; результат в UI и в Журнале.
+кнопки для artisan (`mail:sync`, `messages:reprocess`, `--apply-mail-filters`, `messages:detect-follow-ups`, `manager-actions:supersede-stale`, `projects:apply-people`, `projects:merge-duplicates`, `messages:repair-bodies`, `messages:purge-empty`, метрики) с описанием «что / когда»; результат в UI и в Журнале.
 
 ------
 
@@ -670,8 +693,8 @@ Singleton `app_settings` (`AppSetting` / `AppSettingService`), экран Orchid
 1. `ProjectMatcher` (правила);
 2. `AutoCreateProjectFromIncomingMail` (Redmine, без LLM);
 3. если проект всё ещё `null` — `AutoAssignProjectViaLlm` (привязка к существующему или создание по `proposed_name`, только если `confidence` ≥ порога);
-4. `ApplyRedminePeopleToProject`: из тела `Автор:` → менеджер проекта (`projects.manager_executor_id` + executor), `Назначена:`/`Назначен:` → исполнитель проекта; при пробелах — `ApplyPeopleToProjectViaLlm` (менеджер/исполнители по содержанию письма, без перезаписи уже заданного менеджера);
-5. если есть проект (или кандидаты для client/unknown) — Hermes-анализ: summary / event / requires_manager / confidence;
+4. `ResolveOrCreateProjectTask`, затем `ApplyRedminePeopleToProject`: из тела `Автор:` / `* Автор:` → менеджер **задачи** (`project_tasks.manager_executor_id` + executor на задаче и проекте), `Назначена:`/`Назначен:` → исполнитель **задачи** (`executor_project_task`); при пробелах — `ApplyPeopleToProjectViaLlm` (менеджер/исполнители по содержанию письма, без перезаписи уже заданного менеджера задачи);
+5. если есть проект (или кандидаты для client/site_lead/unknown) — Hermes-анализ: summary / event / requires_manager / confidence;
 6. тема с `(Обратная связь)` → `requires_manager=true` (+ ManagerAction, если Event ещё нет).
 
 После включения галочек для уже классифицированных писем без проекта: `messages:reprocess --reclassify-unassigned` (кнопка в «Сервисные команды»). Queue worker периодически перезапускается (`--max-jobs=50`).
@@ -702,7 +725,7 @@ Draft ответа
 Отклонить
 ```
 
-Доменная логика — в сервисах (`ProjectService`, `ClientCompanyService`, `ClientContactService`, `ExecutorService`, `MessageManualOverrideService`, `ManagerActionService`, `MailFilterSettingService`, `AppSettingService`, `AutoCreateProjectFromIncomingMail`, `AutoAssignProjectViaLlm`, `SuggestUnassignedMessageAssignments`, `SuggestUnassignedMessageAssignmentsWithLlm`, `BulkAttachMessagesToProject`, `UpdateConversationAgentMemory`), не в Orchid screens.
+Доменная логика — в сервисах (`ProjectService`, `ClientCompanyService`, `ClientContactService`, `ExecutorService`, `MessageManualOverrideService`, `ManagerActionService`, `SupersedeStaleConversationManagerActions`, `PropagateProjectToConversationMessages`, `MailFilterSettingService`, `AppSettingService`, `AutoCreateProjectFromIncomingMail`, `AutoAssignProjectViaLlm`, `SuggestUnassignedMessageAssignments`, `SuggestUnassignedMessageAssignmentsWithLlm`, `BulkAttachMessagesToProject`, `UpdateConversationAgentMemory`), не в Orchid screens.
 
 ------
 
@@ -791,6 +814,10 @@ YANDEX_IMAP_FIRST_SYNC_LIMIT=100
 Не выполнять длительный AI-анализ внутри HTTP request.
 
 Использовать очереди.
+
+При временных ошибках LLM (лимит Gemini 429, 5xx, сеть) `AnalyzeMessage` **не** ставит письмо в `failed` сразу: пишет `deferred` в журнал и повторно ставит `AnalyzeMessageJob` в очередь с backoff (`ai.queue.analyze_tries` / `ai.queue.analyze_backoff_seconds`, по умолчанию до 10 попыток: 1–30 мин). `failed` — только после исчерпания ретраев или при невалидном JSON / неизвестном enum.
+
+Аналогично для **LLM-распределения по проектам** (`AutoAssignProjectViaLlm`): при 429 письмо **не** уходит в `needs_manual` сразу — статус `classified` + `RetryAutoAssignProjectViaLlmJob`. В «Требует ручной обработки» — только после того, как LLM реально отработала и не назначила проект (ниже порога / unmatched), либо после исчерпания ретраев.
 
 Пример:
 

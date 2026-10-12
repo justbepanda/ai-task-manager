@@ -83,6 +83,7 @@ final class AdminLabels
         return match ($status) {
             'ok' => 'Успешно',
             'failed' => 'Ошибка',
+            'deferred' => 'Отложено (повтор)',
             'ambiguous' => 'Неоднозначно',
             'unmatched' => 'Без совпадения',
             'skipped' => 'Пропущено',

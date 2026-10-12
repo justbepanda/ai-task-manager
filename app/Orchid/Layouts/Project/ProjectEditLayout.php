@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Orchid\Layouts\Project;
 
 use App\Enums\ProjectStatus;
-use App\Models\Executor;
 use Orchid\Screen\Fields\Input;
 use Orchid\Screen\Fields\Select;
 use Orchid\Screen\Fields\TextArea;
@@ -29,19 +28,6 @@ class ProjectEditLayout extends Rows
                 ->title('Статус')
                 ->fromEnum(ProjectStatus::class, 'label')
                 ->required(),
-
-            Select::make('project.manager_executor_id')
-                ->title('Менеджер проекта')
-                ->options(
-                    Executor::query()
-                        ->orderBy('last_name')
-                        ->orderBy('first_name')
-                        ->get()
-                        ->mapWithKeys(static fn (Executor $e): array => [(string) $e->id => $e->fullName()])
-                        ->all()
-                )
-                ->empty('Не выбран')
-                ->help('Обычно автор задачи Redmine (поле «Автор:» в письме).'),
 
             TextArea::make('project.instruction_body')
                 ->title('Инструкция для AI')

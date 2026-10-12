@@ -12,6 +12,8 @@ use App\Orchid\Screens\Executor\ExecutorEditScreen;
 use App\Orchid\Screens\Executor\ExecutorListScreen;
 use App\Orchid\Screens\MailFilter\MailFilterSettingEditScreen;
 use App\Orchid\Screens\Settings\AppSettingEditScreen;
+use App\Orchid\Screens\Event\EventListScreen;
+use App\Orchid\Screens\Event\EventViewScreen;
 use App\Orchid\Screens\ManagerAction\ManagerActionListScreen;
 use App\Orchid\Screens\ManagerAction\ManagerActionViewScreen;
 use App\Orchid\Screens\Message\MessageListScreen;
@@ -223,6 +225,20 @@ Route::screen('messages', MessageListScreen::class)
     ->breadcrumbs(fn (Trail $trail) => $trail
         ->parent('platform.index')
         ->push('Входящие', route('platform.messages')));
+
+// Events
+Route::screen('events/{event}', EventViewScreen::class)
+    ->name('platform.events.view')
+    ->whereNumber('event')
+    ->breadcrumbs(fn (Trail $trail, $event) => $trail
+        ->parent('platform.events')
+        ->push('Событие #'.$event->id, route('platform.events.view', $event)));
+
+Route::screen('events', EventListScreen::class)
+    ->name('platform.events')
+    ->breadcrumbs(fn (Trail $trail) => $trail
+        ->parent('platform.index')
+        ->push('События', route('platform.events')));
 
 // Manager actions
 Route::screen('manager-actions/{manager_action}', ManagerActionViewScreen::class)

@@ -11,20 +11,28 @@ use App\Support\EmailAddress;
 
 /**
  * Deterministic classification — first match wins (AGENTS §6, §22):
- * 0. ignored (global MailFilterMatcher blacklist)
- * 1. technical  2. newsletter  3. personal  4. client  5. unknown
+ * 0. site_lead (forms from known domains; before blacklist noreply@)
+ * 1. ignored (global MailFilterMatcher blacklist)
+ * 2. technical  3. newsletter  4. personal  5. client  6. unknown
  *
  * `ignored` is for system/Yandex-ID/security mail (admin blacklist).
  * `technical` remains for project-related sources (Redmine/Jira/etc.).
+ * `site_lead` is website booking/callback forms — not ordinary client mail.
  */
 class MessageClassifier
 {
     public function __construct(
         private readonly MailFilterMatcher $mailFilterMatcher,
+        private readonly SiteLeadMatcher $siteLeadMatcher,
     ) {}
 
     public function classify(Message $message): ClassificationResult
     {
+        // Before ignored: noreply@rbi.ru is on the blacklist but site leads are project work.
+        if ($result = $this->matchSiteLead($message)) {
+            return $result;
+        }
+
         if ($result = $this->matchIgnored($message)) {
             return $result;
         }
@@ -63,6 +71,19 @@ class MessageClassifier
             MessageClassification::Ignored,
             (float) config('classification.confidence.ignored', 0.99),
             [$reason],
+        );
+    }
+
+    private function matchSiteLead(Message $message): ?ClassificationResult
+    {
+        if (! $this->siteLeadMatcher->matches($message)) {
+            return null;
+        }
+
+        return new ClassificationResult(
+            MessageClassification::SiteLead,
+            (float) config('classification.confidence.site_lead', 0.93),
+            ['site_lead_form'],
         );
     }
 

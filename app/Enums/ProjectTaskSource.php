@@ -6,6 +6,7 @@ enum ProjectTaskSource: string
 {
     case Redmine = 'redmine';
     case Jira = 'jira';
+    case Aspro = 'aspro';
     case EmailThread = 'email_thread';
 
     public function label(): string
@@ -13,6 +14,7 @@ enum ProjectTaskSource: string
         return match ($this) {
             self::Redmine => 'Redmine',
             self::Jira => 'Jira',
+            self::Aspro => 'Aspro',
             self::EmailThread => 'Переписка',
         };
     }

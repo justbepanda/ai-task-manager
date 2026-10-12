@@ -12,12 +12,13 @@ use App\Models\Executor;
 use App\Models\Message;
 use App\Models\ProcessingLog;
 use App\Models\Project;
+use App\Models\ProjectTask;
 use Illuminate\Support\Facades\Log;
 
 /**
- * LLM proposes project manager / executors from mail content.
+ * LLM proposes task manager / executors from mail content.
  * Deterministic Redmine parsing runs first; this fills gaps and covers client threads.
- * Never overwrites an existing manager_executor_id.
+ * Never overwrites an existing task manager_executor_id.
  */
 class ApplyPeopleToProjectViaLlm
 {
@@ -28,14 +29,20 @@ class ApplyPeopleToProjectViaLlm
     ) {}
 
     /**
-     * @return array{manager_id: ?int, assignee_ids: list<int>, applied: bool}
+     * @return array{manager_id: ?int, assignee_ids: list<int>, applied: bool, task_id: ?int}
      */
-    public function handle(Message $message, Project $project): array
+    public function handle(Message $message, Project $project, ?ProjectTask $task = null): array
     {
         if ($message->classification === MessageClassification::Ignored
             || $message->classification === MessageClassification::Newsletter
-            || $message->classification === MessageClassification::Personal) {
-            return ['manager_id' => null, 'assignee_ids' => [], 'applied' => false];
+            || $message->classification === MessageClassification::Personal
+            || $message->classification === MessageClassification::SiteLead) {
+            return ['manager_id' => null, 'assignee_ids' => [], 'applied' => false, 'task_id' => null];
+        }
+
+        $task ??= $message->projectTask;
+        if ($task === null || (int) $task->project_id !== (int) $project->id) {
+            return ['manager_id' => null, 'assignee_ids' => [], 'applied' => false, 'task_id' => null];
         }
 
         $executors = Executor::query()
@@ -49,22 +56,26 @@ class ApplyPeopleToProjectViaLlm
         try {
             $payload = $this->llm->completeJson(
                 $this->systemPrompt(),
-                $this->userPrompt($message, $project, $executors, $bodyChars),
+                $this->userPrompt($message, $project, $task, $executors, $bodyChars),
             );
         } catch (\Throwable $e) {
             Log::warning('ApplyPeopleToProjectViaLlm: LLM call failed', [
                 'message_id' => $message->id,
                 'project_id' => $project->id,
+                'project_task_id' => $task->id,
                 'error' => $e->getMessage(),
             ]);
             ProcessingLog::query()->create([
                 'message_id' => $message->id,
                 'step' => 'llm_people_applied',
                 'status' => 'failed',
-                'details' => ['error' => $e->getMessage()],
+                'details' => [
+                    'error' => $e->getMessage(),
+                    'project_task_id' => $task->id,
+                ],
             ]);
 
-            return ['manager_id' => null, 'assignee_ids' => [], 'applied' => false];
+            return ['manager_id' => null, 'assignee_ids' => [], 'applied' => false, 'task_id' => (int) $task->id];
         }
 
         $decision = $this->normalizePayload($payload, $executors);
@@ -79,17 +90,18 @@ class ApplyPeopleToProjectViaLlm
                 'details' => [
                     'reason' => $decision['reason'] ?? 'no_people',
                     'confidence' => $decision['confidence'],
+                    'project_task_id' => $task->id,
                 ],
             ]);
 
-            return ['manager_id' => null, 'assignee_ids' => [], 'applied' => false];
+            return ['manager_id' => null, 'assignee_ids' => [], 'applied' => false, 'task_id' => (int) $task->id];
         }
 
         $managerId = null;
         $assigneeIds = [];
         $changed = false;
 
-        $project->refresh();
+        $task->refresh();
 
         if ($decision['manager_id'] !== null) {
             $managerId = $decision['manager_id'];
@@ -98,10 +110,11 @@ class ApplyPeopleToProjectViaLlm
         }
 
         if ($managerId !== null) {
+            $task->executors()->syncWithoutDetaching([$managerId]);
             $project->executors()->syncWithoutDetaching([$managerId]);
-            if ($project->manager_executor_id === null) {
-                $project->manager_executor_id = $managerId;
-                $project->save();
+            if ($task->manager_executor_id === null) {
+                $task->manager_executor_id = $managerId;
+                $task->save();
                 $changed = true;
             }
             $manager = Executor::query()->find($managerId);
@@ -119,6 +132,7 @@ class ApplyPeopleToProjectViaLlm
         $assigneeIds = array_values(array_unique(array_filter($assigneeIds)));
 
         if ($assigneeIds !== []) {
+            $task->executors()->syncWithoutDetaching($assigneeIds);
             $project->executors()->syncWithoutDetaching($assigneeIds);
             $changed = true;
         }
@@ -129,7 +143,8 @@ class ApplyPeopleToProjectViaLlm
             'status' => $changed ? 'ok' : 'skipped',
             'details' => [
                 'project_id' => $project->id,
-                'manager_executor_id' => $project->manager_executor_id,
+                'project_task_id' => $task->id,
+                'manager_executor_id' => $task->manager_executor_id,
                 'proposed_manager_id' => $managerId,
                 'assignee_executor_ids' => $assigneeIds,
                 'confidence' => $decision['confidence'],
@@ -142,13 +157,14 @@ class ApplyPeopleToProjectViaLlm
             'manager_id' => $managerId,
             'assignee_ids' => $assigneeIds,
             'applied' => $changed,
+            'task_id' => (int) $task->id,
         ];
     }
 
     private function systemPrompt(): string
     {
         return <<<'PROMPT'
-Ты — помощник менеджера проектов. По письму определи менеджера проекта и исполнителей (сотрудников нашей компании).
+Ты — помощник менеджера проектов. По письму определи менеджера задачи и исполнителей (сотрудников нашей компании).
 Верни ТОЛЬКО валидный JSON без markdown.
 
 Схема:
@@ -162,8 +178,8 @@ class ApplyPeopleToProjectViaLlm
 }
 
 Правила:
-- manager — ответственный менеджер со стороны агентства (не клиент).
-- assignees — исполнители/разработчики нашей компании, упомянутые как ответственные за работу.
+- manager — ответственный менеджер по этой задаче/переписке (не клиент).
+- assignees — исполнители/разработчики нашей компании, ответственные за работу по задаче.
 - id только из списка executors. Иначе null / не включай.
 - Если человека нет в списке, но ФИО явно наше (сотрудник) — manager_name / assignee_names.
 - Не путай клиентов и внешние контакты с исполнителями.
@@ -176,7 +192,7 @@ PROMPT;
     /**
      * @param  \Illuminate\Support\Collection<int, Executor>  $executors
      */
-    private function userPrompt(Message $message, Project $project, $executors, int $bodyChars): string
+    private function userPrompt(Message $message, Project $project, ProjectTask $task, $executors, int $bodyChars): string
     {
         $body = (string) ($message->body ?? '');
         if (mb_strlen($body) > $bodyChars) {
@@ -194,7 +210,12 @@ PROMPT;
             'project' => [
                 'id' => (int) $project->id,
                 'name' => (string) $project->name,
-                'manager_executor_id' => $project->manager_executor_id,
+            ],
+            'task' => [
+                'id' => (int) $task->id,
+                'title' => (string) ($task->title ?? ''),
+                'external_key' => (string) ($task->external_key ?? ''),
+                'manager_executor_id' => $task->manager_executor_id,
             ],
             'executors' => $executorRows,
             'message' => [

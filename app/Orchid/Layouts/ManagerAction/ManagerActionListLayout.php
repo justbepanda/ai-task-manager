@@ -14,6 +14,13 @@ class ManagerActionListLayout extends Table
 {
     protected $target = 'actions';
 
+    public function __construct(?string $target = null)
+    {
+        if ($target !== null) {
+            $this->target = $target;
+        }
+    }
+
     protected function columns(): iterable
     {
         return [

@@ -45,6 +45,18 @@ class RedmineMailPeopleExtractorTest extends TestCase
     }
 
     #[Test]
+    public function extracts_author_with_bullet_marker(): void
+    {
+        $result = $this->extractor->extract(
+            '[Tekta - Bug #13] (В работе) Fix',
+            "* Автор: Константин Плашиннов\n* Назначена: Юрий Устинов\n",
+        );
+
+        $this->assertSame('Константин Плашиннов', $result['author']);
+        $this->assertSame('Юрий Устинов', $result['assignee']);
+    }
+
+    #[Test]
     public function feedback_detection_is_case_insensitive(): void
     {
         $this->assertTrue($this->extractor->subjectRequiresFeedback('[A - Bug #3] (обратная СВЯЗЬ) x'));

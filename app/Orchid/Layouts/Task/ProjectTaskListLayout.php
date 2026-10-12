@@ -29,6 +29,8 @@ class ProjectTaskListLayout extends Table
             TD::make('task', 'Задача')
                 ->render(fn (ProjectTask $task) => Link::make($task->displayLabel())
                     ->route('platform.tasks.view', $task)),
+            TD::make('manager', 'Менеджер')
+                ->render(fn (ProjectTask $task) => e($task->managerExecutor?->fullName() ?? '—')),
             TD::make('source', 'Источник')
                 ->render(fn (ProjectTask $task) => e($task->source->label())),
             TD::make('status', 'Статус')

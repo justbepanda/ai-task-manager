@@ -15,6 +15,7 @@ class GeminiAiAnalyzerRetryTest extends TestCase
     {
         config([
             'ai.gemini.api_key' => 'test-key',
+            'ai.gemini.api_keys' => ['test-key'],
             'ai.gemini.model' => 'gemini-test',
             'ai.gemini.fallback_models' => [],
             'ai.gemini.retry.max_attempts' => 3,
@@ -49,6 +50,7 @@ class GeminiAiAnalyzerRetryTest extends TestCase
     {
         config([
             'ai.gemini.api_key' => 'test-key',
+            'ai.gemini.api_keys' => ['test-key'],
             'ai.gemini.model' => 'gemini-primary',
             'ai.gemini.fallback_models' => ['gemini-fallback'],
             'ai.gemini.retry.max_attempts' => 1,
@@ -83,6 +85,7 @@ class GeminiAiAnalyzerRetryTest extends TestCase
     {
         config([
             'ai.gemini.api_key' => 'test-key',
+            'ai.gemini.api_keys' => ['test-key'],
             'ai.gemini.model' => 'gemini-dead',
             'ai.gemini.fallback_models' => ['gemini-alive'],
             'ai.gemini.retry.max_attempts' => 1,
@@ -117,6 +120,7 @@ class GeminiAiAnalyzerRetryTest extends TestCase
     {
         config([
             'ai.gemini.api_key' => 'test-key',
+            'ai.gemini.api_keys' => ['test-key'],
             'ai.gemini.model' => 'gemini-3.6-flash',
             'ai.gemini.fallback_models' => ['gemini-3.5-flash'],
             'ai.gemini.retry.max_attempts' => 3,
@@ -154,10 +158,61 @@ class GeminiAiAnalyzerRetryTest extends TestCase
         $this->assertSame('gemini-3.5-flash', $analyzer->lastModel());
     }
 
+    public function test_switches_to_next_api_key_on_429(): void
+    {
+        config([
+            'ai.gemini.api_key' => 'key-one',
+            'ai.gemini.api_keys' => ['key-one', 'key-two'],
+            'ai.gemini.model' => 'gemini-primary',
+            'ai.gemini.fallback_models' => ['gemini-fallback'],
+            'ai.gemini.retry.max_attempts' => 3,
+            'ai.gemini.retry.base_delay_ms' => 0,
+            'ai.gemini.thinking_level' => null,
+        ]);
+
+        $keyOneHits = 0;
+        $keyTwoHits = 0;
+
+        Http::fake(function ($request) use (&$keyOneHits, &$keyTwoHits) {
+            $key = $request->header('x-goog-api-key')[0] ?? '';
+
+            if ($key === 'key-one') {
+                $keyOneHits++;
+
+                return Http::response(['error' => ['message' => 'rate limit']], 429);
+            }
+
+            if ($key === 'key-two') {
+                $keyTwoHits++;
+
+                return Http::response([
+                    'candidates' => [
+                        [
+                            'content' => [
+                                'parts' => [
+                                    ['text' => '{"ok":true}'],
+                                ],
+                            ],
+                        ],
+                    ],
+                ], 200);
+            }
+
+            return Http::response(['error' => ['message' => 'unexpected key']], 500);
+        });
+
+        $result = (new GeminiAiAnalyzer)->completeJson('sys', 'user');
+
+        $this->assertTrue($result['ok']);
+        $this->assertSame(1, $keyOneHits, '429 should switch key without burning model retries');
+        $this->assertSame(1, $keyTwoHits);
+    }
+
     public function test_503_message_is_user_friendly(): void
     {
         config([
             'ai.gemini.api_key' => 'test-key',
+            'ai.gemini.api_keys' => ['test-key'],
             'ai.gemini.model' => 'gemini-test',
             'ai.gemini.fallback_models' => [],
             'ai.gemini.retry.max_attempts' => 1,

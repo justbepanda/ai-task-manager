@@ -10,3 +10,14 @@
     box-shadow: none !important;
     background-image: none !important;
 }
+
+/* Orchid tables: never wrap ID digits (text-balance / narrow columns). */
+table th[data-column="id"],
+table td[data-column="id"],
+table th[data-column="id"] > div,
+table td[data-column="id"] > div {
+    white-space: nowrap !important;
+    word-break: keep-all !important;
+    overflow-wrap: normal !important;
+    text-wrap: nowrap !important;
+}

@@ -8,10 +8,13 @@ use App\Domain\Metrics\HypothesisMetricsReport;
 use App\Enums\ManagerActionStatus;
 use App\Enums\MessageClassification;
 use App\Enums\MessageProcessingStatus;
+use App\Models\Event;
 use App\Models\ManagerAction;
 use App\Models\Message;
 use App\Models\Project;
 use App\Orchid\Layouts\Dashboard\ClickableMetricsLayout;
+use App\Orchid\Layouts\Event\EventListLayout;
+use App\Orchid\Layouts\ManagerAction\ManagerActionListLayout;
 use Orchid\Screen\Actions\Link;
 use Orchid\Screen\Screen;
 use Orchid\Screen\TD;
@@ -111,10 +114,15 @@ class DashboardScreen extends Screen
                 ],
             ],
             'pendingActions' => ManagerAction::query()
-                ->with('project')
+                ->with(['project', 'event', 'message'])
                 ->where('status', ManagerActionStatus::Pending)
                 ->latest()
                 ->limit(8)
+                ->get(),
+            'recentEvents' => Event::query()
+                ->with(['project', 'message'])
+                ->latest()
+                ->limit(10)
                 ->get(),
             'needsManualMessages' => Message::query()
                 ->where('processing_status', MessageProcessingStatus::NeedsManual)
@@ -165,25 +173,7 @@ class DashboardScreen extends Screen
             ]),
 
             Layout::block([
-                Layout::table('pendingActions', [
-                    TD::make('id', 'ID')->width('80')
-                        ->render(fn (ManagerAction $action) => Link::make((string) $action->id)
-                            ->route('platform.manager-actions.view', $action)),
-                    TD::make('project', 'Проект')
-                        ->render(function (ManagerAction $action) {
-                            if ($action->project === null) {
-                                return '—';
-                            }
-
-                            return Link::make($action->project->name)
-                                ->route('platform.projects.edit', $action->project);
-                        }),
-                    TD::make('reason', 'Причина')
-                        ->render(fn (ManagerAction $action) => e(\Illuminate\Support\Str::limit((string) $action->reason, 80))),
-                    TD::make('open', '')
-                        ->render(fn (ManagerAction $action) => Link::make('Открыть')
-                            ->route('platform.manager-actions.view', $action)),
-                ]),
+                new ManagerActionListLayout('pendingActions'),
             ])
                 ->title('Ожидающие действия менеджера')
                 ->vertical()
@@ -191,6 +181,17 @@ class DashboardScreen extends Screen
                     Link::make('Все действия')
                         ->icon('bs.clipboard-check')
                         ->route('platform.manager-actions'),
+                ]),
+
+            Layout::block([
+                new EventListLayout('recentEvents'),
+            ])
+                ->title('Лента событий')
+                ->vertical()
+                ->commands([
+                    Link::make('Все события')
+                        ->icon('bs.lightning')
+                        ->route('platform.events'),
                 ]),
 
             Layout::block([

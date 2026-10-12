@@ -14,7 +14,7 @@ use Throwable;
 class GeminiAiAnalyzer implements AiAnalyzer
 {
     /** @var list<int> */
-    private const RETRYABLE_STATUSES = [408, 429, 500, 502, 503, 504];
+    private const RETRYABLE_STATUSES = [408, 500, 502, 503, 504];
 
     private ?string $lastModel = null;
 
@@ -42,13 +42,13 @@ class GeminiAiAnalyzer implements AiAnalyzer
      */
     public function completeJson(string $systemPrompt, string $userPrompt): array
     {
-        $apiKey = config('ai.gemini.api_key');
         $timeout = (int) config('ai.gemini.timeout', 60);
         $baseUrl = rtrim((string) config('ai.gemini.base_url'), '/');
         $maxAttempts = max(1, (int) config('ai.gemini.retry.max_attempts', 3));
         $baseDelayMs = max(0, (int) config('ai.gemini.retry.base_delay_ms', 800));
 
-        if (! is_string($apiKey) || $apiKey === '') {
+        $apiKeys = $this->apiKeyCandidates();
+        if ($apiKeys === []) {
             throw new AnalysisException('Gemini API key is not configured', 'config_error');
         }
 
@@ -56,95 +56,170 @@ class GeminiAiAnalyzer implements AiAnalyzer
         $lastStatus = null;
         $lastException = null;
         $this->lastModel = null;
+        $keysTried = 0;
 
-        foreach ($models as $modelIndex => $model) {
-            $this->lastModel = $model;
-            $url = "{$baseUrl}/models/{$model}:generateContent";
-            $hasFallback = $modelIndex < count($models) - 1;
+        foreach ($apiKeys as $keyIndex => $apiKey) {
+            $keysTried++;
+            $hasNextKey = $keyIndex < count($apiKeys) - 1;
 
-            for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
-                try {
-                    $response = Http::timeout($timeout)
-                        ->withHeaders([
-                            'x-goog-api-key' => $apiKey,
-                            'Content-Type' => 'application/json',
-                        ])
-                        ->post($url, $this->requestBody($systemPrompt, $userPrompt, $model));
-                } catch (ConnectionException $e) {
-                    $lastException = $e;
-                    Log::warning('Gemini API connection failed', [
+            foreach ($models as $modelIndex => $model) {
+                $this->lastModel = $model;
+                $url = "{$baseUrl}/models/{$model}:generateContent";
+                $hasFallbackModel = $modelIndex < count($models) - 1;
+
+                for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+                    try {
+                        $response = Http::timeout($timeout)
+                            ->withHeaders([
+                                'x-goog-api-key' => $apiKey,
+                                'Content-Type' => 'application/json',
+                            ])
+                            ->post($url, $this->requestBody($systemPrompt, $userPrompt, $model));
+                    } catch (ConnectionException $e) {
+                        $lastException = $e;
+                        Log::warning('Gemini API connection failed', [
+                            'model' => $model,
+                            'api_key_index' => $keyIndex + 1,
+                            'attempt' => $attempt,
+                        ]);
+
+                        if ($attempt < $maxAttempts) {
+                            $this->sleepBeforeRetry($baseDelayMs, $attempt);
+
+                            continue;
+                        }
+
+                        if ($hasFallbackModel) {
+                            continue 2;
+                        }
+
+                        if ($hasNextKey) {
+                            Log::info('Gemini network error; switching API key', [
+                                'from_key_index' => $keyIndex + 1,
+                                'to_key_index' => $keyIndex + 2,
+                            ]);
+
+                            continue 3;
+                        }
+
+                        throw new AnalysisException(
+                            'Gemini временно недоступен (сеть). Повтор в очереди через минуту.',
+                            'http_error',
+                            $e,
+                        );
+                    } catch (Throwable $e) {
+                        throw new AnalysisException('Gemini API request failed', 'http_error', $e);
+                    }
+
+                    if ($response->successful()) {
+                        return $this->parseSuccessfulResponse($response);
+                    }
+
+                    $lastStatus = $response->status();
+                    Log::warning('Gemini API HTTP error', [
+                        'status' => $lastStatus,
                         'model' => $model,
+                        'api_key_index' => $keyIndex + 1,
                         'attempt' => $attempt,
                     ]);
 
-                    if ($attempt < $maxAttempts) {
+                    // Rate limit: prefer next account key (quota is usually per key).
+                    if ($lastStatus === 429) {
+                        if ($hasNextKey) {
+                            Log::info('Gemini rate limited; switching API key', [
+                                'from_key_index' => $keyIndex + 1,
+                                'to_key_index' => $keyIndex + 2,
+                                'model' => $model,
+                            ]);
+
+                            continue 3;
+                        }
+
+                        if ($hasFallbackModel) {
+                            Log::info('Gemini rate limited; switching to fallback model (last API key)', [
+                                'from' => $model,
+                                'to' => $models[$modelIndex + 1],
+                                'api_key_index' => $keyIndex + 1,
+                            ]);
+
+                            continue 2;
+                        }
+
+                        throw new AnalysisException(
+                            $this->userFacingHttpError($lastStatus, $models, $keysTried),
+                            'rate_limit',
+                        );
+                    }
+
+                    // Unknown/retired model id — try next candidate on same key.
+                    if ($lastStatus === 404 && $hasFallbackModel) {
+                        continue 2;
+                    }
+
+                    $retryable = in_array($lastStatus, self::RETRYABLE_STATUSES, true);
+                    if ($retryable && $attempt < $maxAttempts) {
                         $this->sleepBeforeRetry($baseDelayMs, $attempt);
 
                         continue;
                     }
 
-                    if ($hasFallback) {
+                    if ($retryable && $hasFallbackModel) {
                         continue 2;
                     }
 
+                    if ($retryable && $hasNextKey) {
+                        Log::info('Gemini transient error; switching API key', [
+                            'status' => $lastStatus,
+                            'from_key_index' => $keyIndex + 1,
+                            'to_key_index' => $keyIndex + 2,
+                        ]);
+
+                        continue 3;
+                    }
+
                     throw new AnalysisException(
-                        'Gemini временно недоступен (сеть). Повторите через минуту.',
-                        'http_error',
-                        $e,
+                        $this->userFacingHttpError($lastStatus, $models, $keysTried),
+                        $this->errorTypeForHttpStatus($lastStatus),
                     );
-                } catch (Throwable $e) {
-                    throw new AnalysisException('Gemini API request failed', 'http_error', $e);
                 }
-
-                if ($response->successful()) {
-                    return $this->parseSuccessfulResponse($response);
-                }
-
-                $lastStatus = $response->status();
-                Log::warning('Gemini API HTTP error', [
-                    'status' => $lastStatus,
-                    'model' => $model,
-                    'attempt' => $attempt,
-                ]);
-
-                // Rate limit: switch to fallback immediately (retries won't clear quota).
-                if ($lastStatus === 429 && $hasFallback) {
-                    Log::info('Gemini rate limited; switching to fallback model', [
-                        'from' => $model,
-                        'to' => $models[$modelIndex + 1],
-                    ]);
-
-                    continue 2;
-                }
-
-                // Unknown/retired model id — try next candidate.
-                if ($lastStatus === 404 && $hasFallback) {
-                    continue 2;
-                }
-
-                $retryable = in_array($lastStatus, self::RETRYABLE_STATUSES, true);
-                if ($retryable && $attempt < $maxAttempts) {
-                    $this->sleepBeforeRetry($baseDelayMs, $attempt);
-
-                    continue;
-                }
-
-                if ($retryable && $hasFallback) {
-                    continue 2;
-                }
-
-                throw new AnalysisException(
-                    $this->userFacingHttpError($lastStatus, $models),
-                    'http_error',
-                );
             }
         }
 
         throw new AnalysisException(
-            $this->userFacingHttpError($lastStatus, $models),
-            'http_error',
+            $this->userFacingHttpError($lastStatus, $models, $keysTried),
+            $this->errorTypeForHttpStatus($lastStatus),
             $lastException,
         );
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function apiKeyCandidates(): array
+    {
+        $keys = config('ai.gemini.api_keys', []);
+        if (! is_array($keys)) {
+            $keys = [];
+        }
+
+        $primary = config('ai.gemini.api_key');
+        if (is_string($primary) && trim($primary) !== '') {
+            array_unshift($keys, trim($primary));
+        }
+
+        $out = [];
+        foreach ($keys as $key) {
+            if (! is_string($key)) {
+                continue;
+            }
+            $key = trim($key);
+            if ($key === '' || in_array($key, $out, true)) {
+                continue;
+            }
+            $out[] = $key;
+        }
+
+        return $out;
     }
 
     /**
@@ -168,7 +243,6 @@ class GeminiAiAnalyzer implements AiAnalyzer
 
         return $models;
     }
-
     /**
      * @return array<string, mixed>
      */
@@ -232,14 +306,17 @@ class GeminiAiAnalyzer implements AiAnalyzer
         usleep(($delayMs + $jitterMs) * 1000);
     }
 
-    private function userFacingHttpError(?int $status, array $models = []): string
+    private function userFacingHttpError(?int $status, array $models = [], int $keysTried = 1): string
     {
         $modelsHint = $models !== []
             ? ' Пробовали: '.implode(', ', $models).'.'
             : '';
+        $keysHint = $keysTried > 1
+            ? ' Ключей: '.$keysTried.'.'
+            : '';
 
         if ($status === 429) {
-            return 'Gemini перегружен (лимит запросов).'.$modelsHint.' Подождите минуту и нажмите «Запросить» снова.';
+            return 'Gemini перегружен (лимит запросов).'.$modelsHint.$keysHint.' Анализ будет повторён автоматически.';
         }
 
         if ($status === 404) {
@@ -247,7 +324,7 @@ class GeminiAiAnalyzer implements AiAnalyzer
         }
 
         if ($status !== null && $status >= 500) {
-            return 'Gemini временно недоступен (HTTP '.$status.'). Это обычно проходит само — повторите через минуту.';
+            return 'Gemini временно недоступен (HTTP '.$status.').'.$keysHint.' Анализ будет повторён автоматически.';
         }
 
         if ($status !== null) {
@@ -255,6 +332,23 @@ class GeminiAiAnalyzer implements AiAnalyzer
         }
 
         return 'Gemini API request failed';
+    }
+
+    private function errorTypeForHttpStatus(?int $status): string
+    {
+        if ($status === 429) {
+            return 'rate_limit';
+        }
+
+        if ($status === 404) {
+            return 'config_error';
+        }
+
+        if ($status === null || $status === 408 || $status >= 500) {
+            return 'http_error';
+        }
+
+        return 'provider_error';
     }
 
     /**
@@ -330,10 +424,10 @@ class GeminiAiAnalyzer implements AiAnalyzer
 
 Схема ответа:
 {
-  "classification": "client|technical|newsletter|personal|ignored|unknown",
+  "classification": "client|site_lead|technical|newsletter|personal|ignored|unknown",
   "project_id": integer or null,
   "confidence": float 0..1,
-  "event_type": "client_question|client_request|client_reported_bug|client_approved|client_rejected|task_created|task_updated|task_completed|technical_notification|information_only",
+  "event_type": "client_question|client_request|client_reported_bug|client_approved|client_rejected|task_created|task_updated|task_completed|technical_notification|information_only|site_lead",
   "summary": non-empty string,
   "requires_manager": boolean,
   "suggested_action": "no_action|review|reply|follow_up",
@@ -356,6 +450,8 @@ class GeminiAiAnalyzer implements AiAnalyzer
 - Не предлагай отправку писем самостоятельно; только draft при необходимости.
 - classification — рекомендация.
 - summary: одно короткое предложение о сути (кто + что произошло). Без преамбулы «Задача обновлена» / «Клиент написал», без полного названия тикета и номера Redmine/Jira, если они уже в теме. Цель — быстро прочитать в списке событий.
+- draft_reply: если suggested_action=reply — конкретный ответ клиенту на языке переписки, 2–6 предложений. Опирайся на message.body + conversation_agent_state + project.agent_state / instructions. Не обещай сроки/работы, которых нет в контексте. Не цитируй длинные куски письма. Подпись не выдумывай.
+- Заявка с сайта (тема «Заявка на …», classification=site_lead) → event_type=site_lead, requires_manager=true, suggested_action=review (draft не обязателен).
 - message.body — последний ответ в текущем письме (без цитат). suggested_action и «что произошло сейчас» опирайся на него.
 - message.id — текущее письмо. Не подменяй его другим письмом из conversation_messages / recent_events (особенно более поздним — их в контексте нет).
 - conversation_agent_state — сжатая память диалога (тема, open_questions, waiting_for). Используй как основной фон проблемы.

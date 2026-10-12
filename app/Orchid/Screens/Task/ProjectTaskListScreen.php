@@ -25,7 +25,7 @@ class ProjectTaskListScreen extends Screen
         }
 
         $query = ProjectTask::query()
-            ->with(['project'])
+            ->with(['project', 'managerExecutor'])
             ->orderByDesc('last_message_at')
             ->orderByDesc('id');
 

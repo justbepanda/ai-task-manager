@@ -156,11 +156,44 @@ class AutoAssignProjectViaLlmTest extends TestCase
         $message->refresh();
 
         $this->assertNull($message->project_id);
+        $this->assertSame(MessageProcessingStatus::NeedsManual, $message->processing_status);
         $this->assertDatabaseHas('processing_logs', [
             'message_id' => $message->id,
             'step' => 'project_auto_assigned_llm',
             'status' => 'skipped',
         ]);
+    }
+
+    public function test_rate_limit_defers_without_needs_manual(): void
+    {
+        Bus::fake([ApplyEventJob::class, \App\Jobs\RetryAutoAssignProjectViaLlmJob::class]);
+
+        $this->app->instance(AiAnalyzer::class, (new FakeAiAnalyzer)->withException(
+            new \App\AI\Exceptions\AnalysisException('Gemini перегружен', 'rate_limit'),
+        ));
+
+        $message = $this->pendingMessage([
+            'sender' => 'x@y.z',
+            'subject' => 'Rate limited',
+            'body' => 'Body',
+        ]);
+
+        (new ClassifyMessageJob($message->id))->handle(app(ProcessIncomingMessage::class));
+
+        $message->refresh();
+
+        $this->assertNull($message->project_id);
+        $this->assertNotSame(MessageProcessingStatus::NeedsManual, $message->processing_status);
+        $this->assertSame(MessageProcessingStatus::Classified, $message->processing_status);
+        $this->assertStringContainsString('перегружен', (string) $message->processing_error);
+
+        $this->assertDatabaseHas('processing_logs', [
+            'message_id' => $message->id,
+            'step' => 'project_auto_assigned_llm',
+            'status' => 'deferred',
+        ]);
+
+        Bus::assertDispatched(\App\Jobs\RetryAutoAssignProjectViaLlmJob::class);
     }
 
     public function test_redmine_auto_create_runs_before_llm_when_both_enabled(): void

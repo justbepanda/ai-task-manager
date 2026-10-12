@@ -70,6 +70,10 @@ class PlatformProvider extends OrchidServiceProvider
                 ->route('platform.manager-actions')
                 ->title('Работа'),
 
+            Menu::make('События')
+                ->icon('bs.lightning')
+                ->route('platform.events'),
+
             Menu::make('Метрики гипотезы')
                 ->icon('bs.bar-chart')
                 ->route('platform.metrics.hypothesis'),

@@ -103,6 +103,14 @@ class MessageViewScreen extends Screen
                 Sight::make('subject', 'Тема'),
                 Sight::make('received_at', 'Дата')->render(fn (Message $m) => $m->received_at?->format('d.m.Y H:i:s') ?? '—'),
                 Sight::make('processing_status', 'Статус')->render(fn (Message $m) => e($m->processing_status->label())),
+                Sight::make('processing_error', 'Ошибка обработки')->render(function (Message $m) {
+                    $error = trim((string) ($m->processing_error ?? ''));
+                    if ($error === '') {
+                        return '—';
+                    }
+
+                    return e($error);
+                }),
                 Sight::make('ai_summary', 'Краткое описание')->render(fn (Message $m) => e((string) ($m->ai_summary ?: '—'))),
                 Sight::make('project', 'Проект')->render(function (Message $m) {
                     if ($m->project === null) {

@@ -12,7 +12,6 @@ class DatabaseSeeder extends Seeder
             AdminUserSeeder::class,
             MailFilterSettingSeeder::class,
             AppSettingSeeder::class,
-            ProjectMatchingEnrichmentSeeder::class,
         ]);
     }
 }

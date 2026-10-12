@@ -78,6 +78,30 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Site lead forms — classification=site_lead (not ignored / not client)
+    |--------------------------------------------------------------------------
+    */
+    'site_lead_domains' => [
+        'rbi.ru',
+        'tekta.com',
+        'tekta.ru',
+    ],
+
+    'site_lead_subjects' => [
+        'Заявка на обратный звонок',
+        'Заказ обратного звонка',
+        'Заявка на бронирование',
+        'Заявка на рассрочку',
+        'Заявка на обратную связь',
+        'Новая заявка на обратную связь',
+        'Заявка с сайта',
+        'Новая заявка',
+        'Заявка на консультацию',
+        'Заявка на подбор',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Project matching thresholds
     |--------------------------------------------------------------------------
     */
@@ -105,6 +129,8 @@ return [
         'match_score' => (float) env('REDMINE_SUBJECT_PROJECT_MATCH_SCORE', 0.97),
     ],
 
+    'aspro_project_match_score' => (float) env('ASPRO_PROJECT_MATCH_SCORE', 0.92),
+
     /*
     |--------------------------------------------------------------------------
     | Classification confidence scores (rule-based, not probabilities)
@@ -121,6 +147,7 @@ return [
         'client_domain' => 0.85,
         'client_subject' => 0.78,
         'client_keyword' => 0.70,
+        'site_lead' => 0.93,
         'ignored' => 0.99,
         'unknown' => 0.20,
     ],

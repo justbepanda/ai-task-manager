@@ -46,6 +46,7 @@ class ProjectMatcher
             ->get();
 
         $this->scoreRedmineSubjectProjects($scores, $message, $subject, $projects);
+        $this->scoreAsproSubjectProjects($scores, $message, $subject, $projects);
 
         $redmineSubjectOnly = $this->redmineSubjectExtractor->appliesTo($message)
             && $this->redmineSubjectExtractor->extractNameCandidates($subject) !== [];
@@ -175,6 +176,47 @@ class ProjectMatcher
                 $score,
                 'redmine_subject:'.$matched,
             );
+        }
+    }
+
+    /**
+     * Aspro.Cloud notifications: match project by name/keyword appearing in subject/body.
+     *
+     * @param  array<int, array{score: float, reasons: list<string>}>  $scores
+     * @param  \Illuminate\Support\Collection<int, Project>  $projects
+     */
+    private function scoreAsproSubjectProjects(array &$scores, Message $message, string $subject, $projects): void
+    {
+        $sender = mb_strtolower((string) ($message->sender ?? ''));
+        $senderEmail = EmailAddress::extract($message->sender) ?? '';
+        $isAspro = str_contains($sender, 'aspro')
+            || str_contains($senderEmail, 'aspro')
+            || str_starts_with(mb_strtolower($subject), 'уведомление')
+            || str_contains(mb_strtolower($subject), 'аспро');
+
+        if (! $isAspro) {
+            return;
+        }
+
+        $haystack = mb_strtolower($subject.' '.(string) ($message->body ?? ''));
+        $score = (float) config('classification.aspro_project_match_score', 0.92);
+
+        foreach ($projects as $project) {
+            $needles = [(string) $project->name];
+            foreach ($project->matchingRule?->keywords ?? [] as $keyword) {
+                $needles[] = (string) $keyword;
+            }
+
+            foreach ($needles as $needle) {
+                $needle = trim($needle);
+                if (mb_strlen($needle) < 3) {
+                    continue;
+                }
+                if (mb_stripos($haystack, mb_strtolower($needle)) !== false) {
+                    $this->addScore($scores, (int) $project->id, $score, 'aspro_subject:'.$needle);
+                    break;
+                }
+            }
         }
     }
 

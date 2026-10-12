@@ -108,6 +108,36 @@ class OrchidAdminScreensTest extends TestCase
     }
 
     #[Test]
+    public function admin_can_open_events_list(): void
+    {
+        $admin = $this->makeAdmin();
+        $project = Project::factory()->create(['name' => 'Event Project', 'status' => ProjectStatus::Active]);
+        $message = Message::factory()->create([
+            'project_id' => $project->id,
+            'subject' => 'Клиентский вопрос',
+            'processing_status' => MessageProcessingStatus::Analyzed,
+            'classification' => MessageClassification::Client,
+        ]);
+        Event::query()->create([
+            'message_id' => $message->id,
+            'project_id' => $project->id,
+            'type' => EventType::ClientQuestion,
+            'summary' => 'Клиент спрашивает о сроках',
+            'confidence' => 0.91,
+            'payload' => [],
+            'applied_at' => null,
+        ]);
+
+        $this->screen('platform.events')
+            ->actingAs($admin)
+            ->display()
+            ->assertOk()
+            ->assertSee('События')
+            ->assertSee('Клиент спрашивает о сроках')
+            ->assertSee('Event Project');
+    }
+
+    #[Test]
     public function admin_can_open_manager_actions_and_approve(): void
     {
         $admin = $this->makeAdmin();
@@ -261,7 +291,11 @@ class OrchidAdminScreensTest extends TestCase
             ->actingAs($admin)
             ->display()
             ->assertOk()
-            ->assertSee('Синхронизировать почту');
+            ->assertSee('Синхронизировать почту')
+            ->assertSee('Всего писем')
+            ->assertSee('Ожидают обработки')
+            ->assertSee('Требуют ручной обработки')
+            ->assertSee('Без проекта');
 
         $this->screen('platform.messages')
             ->actingAs($admin)
@@ -365,7 +399,8 @@ class OrchidAdminScreensTest extends TestCase
             ->display()
             ->assertOk()
             ->assertSee('Добавить клиента')
-            ->assertSee('Добавить исполнителя')
+            ->assertSee('Менеджеры задач')
+            ->assertSee('Исполнители задач')
             ->assertSee('Все задачи')
             ->assertSee('Все входящие');
 

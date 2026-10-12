@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Orchid\Layouts\Project;
 
+use App\Models\Executor;
 use App\Models\Project;
 use Orchid\Screen\Actions\Link;
 use Orchid\Screen\Layouts\Table;
@@ -23,15 +24,21 @@ class ProjectListLayout extends Table
                     ->route('platform.projects.edit', $project)),
             TD::make('status', 'Статус')
                 ->render(fn (Project $project) => e($project->status->label())),
-            TD::make('manager', 'Менеджер')
+            TD::make('manager', 'Менеджеры')
                 ->render(function (Project $project) {
-                    $manager = $project->managerExecutor;
-                    if ($manager === null) {
+                    $managers = $project->relationLoaded('tasks')
+                        ? $project->tasks->pluck('managerExecutor')->filter()
+                        : $project->taskManagers();
+
+                    $unique = $managers->unique('id')->values();
+                    if ($unique->isEmpty()) {
                         return '—';
                     }
 
-                    return Link::make($manager->fullName())
-                        ->route('platform.executors.edit', $manager);
+                    return $unique->map(static function (Executor $manager): string {
+                        return '<a href="'.e(route('platform.executors.edit', $manager)).'">'
+                            .e($manager->fullName()).'</a>';
+                    })->implode(', ');
                 }),
             TD::make('messages_count', 'Входящие')
                 ->align(TD::ALIGN_CENTER)

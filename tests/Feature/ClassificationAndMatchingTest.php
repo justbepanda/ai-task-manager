@@ -286,10 +286,23 @@ class ClassificationAndMatchingTest extends TestCase
 
     public function test_technical_project_source_matches_project_without_ai(): void
     {
+        Bus::fake([ApplyEventJob::class]);
 
         $project = $this->projectWithRules([
             'technical_sources' => ['redmine.company.local'],
         ]);
+
+        $this->app->instance(AiAnalyzer::class, (new FakeAiAnalyzer)->withPayload([
+            'classification' => 'technical',
+            'project_id' => $project->id,
+            'confidence' => 0.88,
+            'event_type' => EventType::TaskUpdated->value,
+            'summary' => 'Redmine: задача #12 обновлена',
+            'requires_manager' => false,
+            'suggested_action' => 'no_action',
+            'draft_reply' => null,
+            'reason' => 'technical notification',
+        ]));
 
         $message = $this->pendingMessage([
             'sender' => 'redmine@redmine.company.local',
@@ -303,7 +316,16 @@ class ClassificationAndMatchingTest extends TestCase
 
         $this->assertSame(MessageClassification::Technical, $message->classification);
         $this->assertSame($project->id, $message->project_id);
-        $this->assertSame(MessageProcessingStatus::Classified, $message->processing_status);
+        $this->assertSame(MessageProcessingStatus::Analyzed, $message->processing_status);
+        $this->assertProcessingSteps($message->id, [
+            'classified',
+            'project_matched',
+            'hermes_pipeline',
+            'hermes_context',
+            'hermes_proposed',
+            'ai_analyzed',
+        ]);
+        Bus::assertDispatched(ApplyEventJob::class);
     }
 
     public function test_redmine_kelnik_subject_matches_project_by_name(): void
